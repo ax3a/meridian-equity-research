@@ -220,9 +220,11 @@ class AnthropicLLMProvider:
 
     @staticmethod
     def _block_to_dict(block: Any) -> dict[str, Any]:
-        # exclude_none: replayed assistant blocks must not carry null fields the API would reject.
+        # Null fields are dropped: replayed assistant blocks must not carry nulls the API would reject.
         if hasattr(block, "model_dump"):
-            return dict(block.model_dump(exclude_none=True))
-        if isinstance(block, dict):
-            return {k: v for k, v in block.items() if v is not None}
-        return {k: v for k, v in vars(block).items() if v is not None}
+            raw = dict(block.model_dump())
+        elif isinstance(block, dict):
+            raw = dict(block)
+        else:
+            raw = dict(vars(block))
+        return {k: v for k, v in raw.items() if v is not None}
