@@ -546,52 +546,158 @@ and the SSE stream `GET /research/{id}/events` emitting `ProgressEvent` JSON (su
 
 ### Task 8: Provider factory, tools, snapshot recorder
 
-**Files:** `backend/src/meridian/providers/factory.py`; `backend/src/meridian/tools/company.py`,
-`financial.py`, `filings.py`, `market.py`, `news.py`, `macro.py`, `peers.py`, `calc.py`, `memory.py`,
-`factory.py`; `backend/scripts/record_snapshots.py`; tests in `backend/tests/unit/tools/`.
+**Files:** Create `backend/src/meridian/providers/factory.py`; `backend/src/meridian/tools/company.py`,
+`financial.py`, `filings.py`, `market.py`, `news.py`, `macro.py`, `peers.py`, `calc.py`, `evidence.py`,
+`memory.py`, `factory.py`; `backend/scripts/record_snapshots.py`; tests in `backend/tests/unit/tools/`.
 
 **Interfaces produced:**
-- `build_providers(settings, *, http=None, cache=None) -> ProviderRegistry` — assembles chains from the
-  Batch 1 providers, activating optional adapters only when their key is present; `build_llm(settings)`.
-- `build_tool_registry() -> ToolRegistry` with exactly these tools:
-  `resolve_company`, `search_companies`, `get_company_profile`, `get_financial_statements`,
-  `compute_financial_metrics`, `calculate_metric`, `run_dcf`, `list_filings`, `index_filings`,
-  `search_filings`, `get_filing_section`, `get_recent_8k_events`, `get_market_quote`, `search_news`,
-  `get_macro_indicators`, `find_peer_candidates`, `get_peer_snapshot`, `lookup_evidence`,
-  `recall_research_memory`.
-- Each tool subclasses `Tool[InputModel, OutputModel]`, declares `name`/`description`/`input_model`,
-  absorbs provider results into `ctx.ledger`, and returns a Pydantic output whose `summarize()` renders
-  evidence ids alongside values so an LLM can cite them.
+- `build_providers(settings, *, http=None, cache=None) -> ProviderRegistry` — assembles fallback chains
+  from the Batch 1 providers, activating optional adapters only when their key is present.
+  `build_llm(settings) -> LLMProvider` returns Anthropic when `settings.llm_mode == "anthropic"`, else the
+  offline provider. `build_retriever(settings, providers, engine=None) -> Retriever`.
+- `build_tool_registry() -> ToolRegistry` containing exactly these 19 tools:
+
+| Tool | Input | Output (Pydantic) |
+|---|---|---|
+| `resolve_company` | `query: str` | `company: CompanyIdentity`, `evidence_ids` |
+| `search_companies` | `query: str`, `limit: int = 8` | `results: list[CompanyIdentity]` |
+| `get_company_profile` | `ticker: str` | `profile: CompanyProfile`, `evidence_ids` |
+| `get_financial_statements` | `ticker: str`, `years: int = 5` | `statements`, `evidence_ids`, `is_snapshot` |
+| `compute_financial_metrics` | `ticker: str`, `years: int = 5`, `include_market: bool = True` | `metrics`, `statements`, `quote`, `evidence_ids` |
+| `calculate_metric` | `metric: str`, `inputs: dict[str, float\|None]`, `period: str = "custom"` | `MetricValue` |
+| `run_dcf` | `assumptions: DCFAssumptions`, `current_price: float\|None` | `DCFResult` |
+| `list_filings` | `ticker`, `forms: list[str] = ["10-K","10-Q","8-K"]`, `limit: int = 12` | `filings: list[FilingRef]` |
+| `index_filings` | `ticker`, `forms = ["10-K","10-Q"]`, `limit: int = 3` | `IndexReport` |
+| `search_filings` | `ticker`, `query`, `forms=None`, `section_keys=None`, `k: int = 6` | `passages: list[PassageHit]` |
+| `get_filing_section` | `ticker`, `form = "10-K"`, `section_key`, `k: int = 8` | `passages: list[PassageHit]` |
+| `get_recent_8k_events` | `ticker`, `limit: int = 10` | `events: list[EightKEvent]` |
+| `get_market_quote` | `ticker`, `history_days: int = 365` | `quote: Quote`, `evidence_ids` |
+| `search_news` | `ticker`, `days: int = 90`, `limit: int = 20` | `articles: list[NewsArticle]`, `evidence_ids` |
+| `get_macro_indicators` | `keys: list[str] \| None = None` | `indicators`, `evidence_ids` |
+| `find_peer_candidates` | `ticker`, `limit: int = 8` | `candidates: list[PeerCandidate]` |
+| `get_peer_snapshot` | `ticker`, `is_target: bool = False` | `PeerSnapshot` |
+| `lookup_evidence` | `evidence_ids: list[str]` | `evidence: list[ResolvedEvidence]` |
+| `recall_research_memory` | `ticker`, `kind: str` | `found: bool`, `item: MemoryItem \| None` |
+
+- `PassageHit(evidence_id, source_id, section, form, filing_date, page, text, score, injection_flags)`.
+- Every tool absorbs provider results into `ctx.ledger` (`ledger.absorb(result)`), and its `summarize()`
+  renders values **with their evidence ids inline** (e.g. `revenue FY2024 = 245,122,000,000 USD [ev_ab12]`)
+  so the LLM can only cite ids it has actually seen.
+- `search_filings`/`get_filing_section` lazily index: if the retriever has no documents for the ticker, call
+  `ensure_indexed` with the latest 10-K and 10-Q first.
+- `record_snapshots.py`: `python scripts/record_snapshots.py --tickers MSFT NVDA AAPL [--peers 4] [--verify]`
+  runs with `data_mode="live"` and `record_snapshots=True` to record real responses, prints each file's size,
+  and with `--verify` re-runs the same calls under `data_mode="snapshot"` to prove the offline path works.
+  Keep total recorded size under ~40 MB.
 
 ### Task 9: Specialist agents
-`company.py`, `financials.py`, `filings.py`, `news.py`, `macro.py`, `competitors.py`, `valuation.py`,
-`risk.py` under `backend/src/meridian/agents/`, each subclassing `BaseAgent` with a tool allowlist, a
-generative path (`llm_research`/`llm_structured`) and a deterministic offline path; plus
-`backend/tests/unit/agents/`.
+
+**Files:** Create `backend/src/meridian/agents/company.py`, `financials.py`, `filings.py`, `news.py`,
+`macro.py`, `competitors.py`, `valuation.py`, `risk.py`; tests in `backend/tests/unit/agents/`.
+
+Each subclasses `BaseAgent` (frozen) and implements `run(task, state, ctx) -> AgentDraft`, with
+`self.generative` selecting between an LLM path (`llm_research` for tool-driven work, `llm_structured` for
+synthesis over gathered evidence) and a deterministic offline path that derives findings from the same
+tool results. Both paths must produce real evidence ids / metric refs.
+
+| Agent | `allowed_tools` | Sections | Notes |
+|---|---|---|---|
+| `company` | resolve_company, get_company_profile, search_filings, get_filing_section, recall_research_memory | COMPANY_OVERVIEW, BUSINESS_MODEL | Item 1 business description, products, revenue sources, geography, customers, competitive position |
+| `financials` | get_financial_statements, compute_financial_metrics, calculate_metric | FINANCIAL_PERFORMANCE, FINANCIAL_TRENDS, KEY_RATIOS | Sets `state_updates["financials"]` and `["metrics"]`; all numbers CALCULATED with `metric_refs`; never restates a figure the engine did not produce |
+| `filings` | list_filings, index_filings, search_filings, get_filing_section, get_recent_8k_events | FINANCIAL_PERFORMANCE, KEY_RISKS, RECENT_DEVELOPMENTS | Queries MD&A, risk factors, segments, guidance, accounting changes, material events |
+| `news` | search_news, get_recent_8k_events | RECENT_DEVELOPMENTS | 8-K items are FACT; headlines are FACT *about reporting*; any read-through is INTERPRETATION |
+| `macro` | get_macro_indicators, search_filings | MACRO | Only asserts a macro link when filing evidence shows exposure; with nothing material, returns a summary saying so and zero findings (not a failure) |
+| `competitors` | find_peer_candidates, get_peer_snapshot, search_filings | INDUSTRY_COMPETITION | Generative mode may add peers by ticker with a reason, each validated by resolution; max 5 peers snapshotted; sets `state_updates["peers"]` |
+| `valuation` | get_market_quote, compute_financial_metrics, calculate_metric, run_dcf, get_peer_snapshot | VALUATION | Builds `ValuationResult`; peer medians from `state.peers`; DCF only when revenue/FCF positive and shares known; every assumption listed in `methodology_notes` with its rationale; sets `state_updates["valuation"]` |
+| `risk` | search_filings, get_filing_section, calculate_metric | KEY_RISKS | One finding per `RiskCategory` where evidence exists, `category` set, each tied to filing evidence or a leverage/liquidity metric |
+
+DCF assumptions are derived deterministically and documented: revenue growth starts at
+`min(3y revenue CAGR, 0.25)` decaying linearly to 0.04 by year 5; `fcf_margin` = 3-year average FCF margin;
+`discount_rate` 0.09; `terminal_growth` 0.025; `net_cash` from metrics. Never let the LLM invent these.
 
 ### Task 10: Supervisor, bull, bear, critic, report writer
-`supervisor.py`, `bull.py`, `bear.py`, `critic.py`, `report_writer.py`, `report_assembly.py`,
-`registry.py` under `backend/src/meridian/agents/`, implementing the `Supervisor`, `Critic` and
-`ReportWriter` protocols in `agents/contracts.py`; plus tests including planted-hallucination detection.
+
+**Files:** Create `backend/src/meridian/agents/supervisor.py`, `bull.py`, `bear.py`, `critic.py`,
+`report_writer.py`, `report_assembly.py`, `registry.py`; tests in `backend/tests/unit/agents/`.
+Implement the `Supervisor`, `Critic`, `ReportWriter` protocols from the frozen `agents/contracts.py`.
+
+- **Supervisor.** `resolve` uses `resolve_company`. `plan` builds a deterministic base plan
+  (wave 1: company, financials, filings, news, and macro only when the request or sector implies it;
+  wave 2: competitors, valuation, risk; wave 3: bull, bear), adjusts for `depth`
+  (`quick` drops macro/bull/bear, `deep` adds DCF and more peers) and for `focus_areas` (which sharpen task
+  objectives and set `instructions`), then optionally refines via the planner-tier LLM. The refinement is
+  validated: only known agents, waves preserved, <= 10 tasks, and every dropped agent recorded in
+  `skipped_agents` with a reason. `review` runs deterministic gap/conflict checks (failed agents, empty
+  sections, numeric claims disagreeing with `state.metrics`, peer revenue inconsistent with statements) and
+  returns at most `settings.max_supervisor_loops` rounds of follow-up tasks. `tasks_for_feedback` and
+  `tasks_for_rework` are deterministic and must produce fingerprint-distinct tasks (`revision + 1`).
+- **Bull / bear.** `allowed_tools = {lookup_evidence, search_filings}`. They argue only from evidence
+  already in state plus anything they retrieve, and may not introduce uncited claims.
+- **Critic.** Deterministic checks always run (cheap and reliable): FACT findings without evidence;
+  CALCULATED findings whose numbers disagree with `state.metrics` beyond 1% tolerance (parse figures out of
+  the claim text); missing citations; stale evidence in RECENT_DEVELOPMENTS (source older than ~400 days);
+  near-duplicate claims across agents; contradictory directional claims about the same metric; findings
+  whose evidence ids were stripped by validation. A critic-tier LLM pass then reviews each agent's findings
+  against its evidence for unsupported or hallucinated content and weak assumptions. Results merge into a
+  `CriticReview`; findings are marked REJECTED (high severity), UNVERIFIED (medium) or APPROVED, with
+  `rework_notes` per agent. Verdict is `NEEDS_REVISION` while any high-severity issue remains and
+  `revision_round < settings.max_revision_rounds`.
+- **Report writer.** Writes only from APPROVED/UNVERIFIED findings; UNVERIFIED content may appear only in
+  OPEN_QUESTIONS, visibly marked. In generative mode the writer-tier LLM writes each section's prose
+  constrained to the supplied findings and must include `[ev_xxx]` markers, and any marker that is not a
+  real evidence id is rejected and the section retried. `report_assembly.py` holds pure functions building
+  the chart series, key-metric rows, resolved citations and a markdown rendering of the report.
+- `registry.py`: `build_agent_set(deps: AgentDeps) -> AgentSet`.
 
 ### Task 11: LangGraph workflow, runner, memory
-`backend/src/meridian/graph/state_ops.py`, `nodes.py`, `routing.py`, `builder.py`, `runner.py`;
-`backend/src/meridian/memory/session.py`, `inmemory.py`; plus `backend/tests/unit/graph/`.
+
+**Files:** Create `backend/src/meridian/graph/state_ops.py`, `nodes.py`, `routing.py`, `builder.py`,
+`runner.py`; `backend/src/meridian/memory/inmemory.py`, `freshness.py`; tests in
+`backend/tests/unit/graph/`.
+
+- `state_ops.updates_from_result(result: AgentResult, task: ResearchTask) -> dict` maps an agent result into
+  a state update (outputs, output_history, sources, evidence, tool_calls, usage, task status,
+  completed_fingerprints, timings, errors).
+- Nodes: `intake`, `plan`, `dispatch`, one worker node per specialist agent, `advance_wave`,
+  `supervisor_review`, `critic`, `revise`, `human_review` (LangGraph `interrupt`), `write_report`,
+  `finalize`. Worker nodes take a `WorkerInput(task, snapshot)` input schema and are reached by `Send`.
+- Routing: `dispatch` returns `list[Send]` for every pending task in the current wave, or advances;
+  `route_after_critic` chooses revise / human review / write; `route_after_human` handles approve versus
+  extra-work requests. Enforce the iteration caps, task-fingerprint dedup (never dispatch the same
+  fingerprint twice), per-agent timeout and `settings.graph_recursion_limit`.
+- `builder.build_graph(agents, settings, events, checkpointer=None)`; register `meridian.*` types with the
+  checkpoint serializer's allowed msgpack modules (LangGraph 1.2 warns about unregistered types).
+- `runner.ResearchRunner`: `start(request) -> session_id`, `resume(session_id, feedback)`, `cancel`,
+  `status`, and `subscribe(session_id)` yielding `ProgressEvent`s (queue fan-out plus replay from the store
+  for `Last-Event-ID`). Define a `RunStore` protocol (`save_state`, `get_state`, `save_event`,
+  `list_events_since`) with an in-memory implementation; the DB-backed one comes in Task 12.
+- `memory/freshness.py`: TTL per memory kind (profile 30d, financial_metrics 7d, peer_set 30d,
+  research_summary 90d); `memory/inmemory.py`: in-memory `ResearchMemoryStore` and `PreferenceStore`.
+- Tests use `ScriptedLLMProvider` and fake agents: assert the plan produces waves, that wave 2 sees wave 1
+  output, that a failed agent does not abort the run, that the critic loop revises then terminates at the
+  cap, that duplicate fingerprints are never dispatched twice, that the approval interrupt pauses and
+  resumes, and that feedback ("add competitor AMD") produces new tasks.
 
 ## Batch 3 — API, delivery, evaluation
 
 ### Task 12: FastAPI application, persistence wiring, CLI
-`backend/src/meridian/api/**`, `backend/src/meridian/cli.py`, `backend/tests/integration/api/`.
+`backend/src/meridian/api/**` (app factory, settings-driven CORS, API-key dependency, Redis rate limiter,
+central exception handler mapping `MeridianError.code`/`status_code` to the frozen `ErrorResponse`, request
+ids, structured access logging, `/health`, `/api/v1` routers for every endpoint in the frozen
+`schemas/api.py` plus the SSE stream), a DB-backed `RunStore`/memory/preferences wiring, and
+`backend/src/meridian/cli.py` (`meridian research "Analyse Microsoft"`, `meridian serve`,
+`meridian record-snapshots`). Integration tests in `backend/tests/integration/api/`.
 
 ### Task 13: Docker, scripts, developer experience, CI
-`docker/**`, root `docker-compose.yml` app services, `Makefile`, `scripts/*.ps1`, `.gitattributes`,
+`docker/backend.Dockerfile`, `docker/frontend.Dockerfile`, app services in the root `docker-compose.yml`,
+`Makefile`, `scripts/*.ps1` (`setup`, `dev`, `test`, `lint`, `format`, `docker-up`), `.gitattributes`,
 `.github/workflows/ci.yml`.
 
 ### Task 14: Evaluation harness and end-to-end tests
-`evals/**`, `backend/tests/e2e/`.
-
-Batch 2 and 3 task briefs are expanded with full interface detail immediately before dispatch, once the
-Batch 1 interfaces they consume exist in the repository.
+`evals/**` (benchmark queries incl. a bank, an unknown ticker and an injected-instruction document;
+metrics for task completion, routing accuracy, citation coverage, calculation accuracy, hallucination
+rate, latency and cost; JSON + markdown scorecard) and `backend/tests/e2e/` (full offline
+"Analyse Microsoft" run through the graph).
 
 ---
 
