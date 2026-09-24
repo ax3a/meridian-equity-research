@@ -35,10 +35,17 @@ ALLOWED_HOSTS: frozenset[str] = frozenset({
     "finnhub.io",
     "api.polygon.io",
     "api.stlouisfed.org",
+    "query1.finance.yahoo.com",
+    "home.treasury.gov",
 })
 
 # Requests per second per host. SEC fair-access policy caps at 10 req/s.
-HOST_RATE: dict[str, float] = {"www.sec.gov": 8.0, "data.sec.gov": 8.0, "efts.sec.gov": 5.0}
+HOST_RATE: dict[str, float] = {
+    "www.sec.gov": 8.0,
+    "data.sec.gov": 8.0,
+    "efts.sec.gov": 5.0,
+    "api.gdeltproject.org": 0.2,
+}
 DEFAULT_RATE = 4.0
 MAX_BODY_BYTES = 60 * 1024 * 1024
 
