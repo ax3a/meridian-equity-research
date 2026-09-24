@@ -21,6 +21,7 @@ from meridian.core.config import LLMTier, Settings
 from meridian.core.errors import AgentTimeoutError, LLMOutputError, MeridianError
 from meridian.core.ids import utcnow
 from meridian.core.logging import get_logger
+from meridian.memory.types import ResearchMemoryStore
 from meridian.observability.events import EventSink
 from meridian.providers.llm.base import ChatMessage, LLMRequest
 from meridian.providers.registry import ProviderRegistry
@@ -45,6 +46,7 @@ class AgentDeps:
     tools: ToolRegistry
     retriever: Retriever | None
     events: EventSink
+    memory: ResearchMemoryStore | None = None
 
 
 class DraftFinding(BaseModel):
@@ -101,8 +103,7 @@ class BaseAgent(ABC):
 
     # ---- template method ------------------------------------------------
     async def execute(self, task: ResearchTask, state: ResearchState) -> AgentResult:
-        ctx = ToolContext(session_id=state.session_id, agent=self.name, settings=self.deps.settings,
-                          providers=self.deps.providers, retriever=self.deps.retriever, events=self.deps.events)
+        ctx = self.new_context(state)
         self._usage = []
         started = utcnow()
         t0 = time.perf_counter()
@@ -144,6 +145,15 @@ class BaseAgent(ABC):
     async def run(self, task: ResearchTask, state: ResearchState, ctx: ToolContext) -> AgentDraft: ...
 
     # ---- helpers for subclasses ----------------------------------------
+    def new_context(self, state: ResearchState) -> ToolContext:
+        return ToolContext(session_id=state.session_id, agent=self.name, settings=self.deps.settings,
+                           providers=self.deps.providers, retriever=self.deps.retriever, events=self.deps.events,
+                           known_evidence=state.evidence, known_sources=state.sources, memory=self.deps.memory)
+
+    def drain_usage(self) -> list[LLMUsage]:
+        usage, self._usage = self._usage, []
+        return usage
+
     @property
     def generative(self) -> bool:
         return self.deps.providers.llm.generative

@@ -34,11 +34,16 @@ class Settings(BaseSettings):
     # LLM: "auto" uses Anthropic when a key is present, otherwise the deterministic offline mode.
     llm_provider: Literal["auto", "anthropic", "offline"] = "auto"
     anthropic_api_key: SecretStr | None = None
-    model_planner: str = "claude-sonnet-5"
-    model_worker: str = "claude-haiku-4-5-20251001"
-    model_critic: str = "claude-sonnet-5"
-    model_writer: str = "claude-sonnet-5"
-    llm_timeout_seconds: float = 90.0
+    model_planner: str = "claude-opus-5"
+    model_worker: str = "claude-sonnet-5"
+    model_critic: str = "claude-opus-5"
+    model_writer: str = "claude-opus-5"
+    effort_planner: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    effort_worker: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    effort_critic: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    effort_writer: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    llm_refusal_fallbacks: bool = True  # server-side refusal fallbacks on Opus 5
+    llm_timeout_seconds: float = 300.0
     llm_max_retries: int = 3
 
     # Data: "live" = network only, "snapshot" = recorded fixtures only, "auto" = live with snapshot fallback.
@@ -87,6 +92,14 @@ class Settings(BaseSettings):
             "worker": self.model_worker,
             "critic": self.model_critic,
             "writer": self.model_writer,
+        }[tier]
+
+    def effort_for(self, tier: LLMTier) -> str:
+        return {
+            "planner": self.effort_planner,
+            "worker": self.effort_worker,
+            "critic": self.effort_critic,
+            "writer": self.effort_writer,
         }[tier]
 
 

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 from meridian.core.config import Settings
 from meridian.core.errors import MeridianError
 from meridian.core.ids import new_id
+from meridian.memory.types import ResearchMemoryStore
 from meridian.observability.events import EventSink
 from meridian.providers.base import ProviderResult
 from meridian.providers.llm.base import ToolSpec
@@ -58,6 +59,16 @@ class ToolContext:
     events: EventSink
     ledger: EvidenceLedger = field(default_factory=EvidenceLedger)
     calls: list[ToolCallRecord] = field(default_factory=list)
+    # Read-only view of evidence/sources already in the research state (for citation lookup tools).
+    known_evidence: dict[str, Evidence] = field(default_factory=dict)
+    known_sources: dict[str, Source] = field(default_factory=dict)
+    memory: ResearchMemoryStore | None = None
+
+    def evidence(self, evidence_id: str) -> Evidence | None:
+        return self.ledger.evidence.get(evidence_id) or self.known_evidence.get(evidence_id)
+
+    def source(self, source_id: str) -> Source | None:
+        return self.ledger.sources.get(source_id) or self.known_sources.get(source_id)
 
 
 class Tool(ABC, Generic[InT, OutT]):

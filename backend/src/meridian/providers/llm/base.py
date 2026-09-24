@@ -39,8 +39,8 @@ class LLMRequest(BaseModel):
     # in `structured`. With force_output=True (or no other tools) the provider must force that tool.
     output_schema: type[BaseModel] | None = None
     force_output: bool = False
-    max_tokens: int = 4096
-    temperature: float = 0.2
+    max_tokens: int = 16000
+    # No temperature: sampling parameters are rejected (400) by current Claude models. Depth is set via effort.
 
 
 class LLMResponse(BaseModel):

@@ -22,6 +22,8 @@ class ChunkMetadata(BaseModel):
     document_title: str
     page: int | None = None
     chunk_index: int = 0
+    is_snapshot: bool = False
+    snapshot_date: date | None = None
 
 
 class DocumentChunk(BaseModel):
