@@ -95,8 +95,26 @@ _STOPWORDS = {
     "company",
     "stock",
     "shares",
+    # Corporate suffixes and generic entity words. Alone they identify nothing, but they appear in
+    # thousands of SEC titles, so offering them as candidates resolves an arbitrary filer.
     "inc",
     "corp",
+    "corporation",
+    "ltd",
+    "limited",
+    "plc",
+    "holdings",
+    "holding",
+    "group",
+    "partners",
+    "capital",
+    "trust",
+    "industries",
+    "technologies",
+    "systems",
+    "solutions",
+    "international",
+    "enterprises",
 }
 
 

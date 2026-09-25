@@ -18,6 +18,10 @@ PUBLISHER = "U.S. SEC EDGAR"
 RESOLVE_CUTOFF = 0.75
 
 
+def _leading_word(title: str) -> str:
+    return title.strip().split(" ", 1)[0].strip(",.&")
+
+
 class SecCompanyDirectory:
     """CompanyDirectory backed by SEC's ticker directory and submissions API."""
 
@@ -62,17 +66,23 @@ class SecCompanyDirectory:
             if str(r["title"]).lower() == q.lower():
                 return self._to_identity(r)
 
-        # SEC titles are upper case ("MICROSOFT CORP"), so all name matching is case-insensitive.
-        # Prefer a prefix match, then a substring match, taking the shortest title (the parent entity
-        # rather than a longer subsidiary/fund name), before falling back to fuzzy matching.
+        # SEC titles are upper case ("MICROSOFT CORP"), so name matching is case-insensitive. A prefix
+        # match is the strong signal: "Microsoft" -> "MICROSOFT CORP". Matching anywhere inside a title
+        # is deliberately NOT supported: a generic word like "Holdings" appears in thousands of titles,
+        # and accepting one produced a confident, fully-cited report on an unrelated company. A partial
+        # name such as "Chase" is genuinely ambiguous and should fail rather than guess.
         ql = q.lower()
         lowered = [(str(r["title"]).lower(), r) for r in rows]
-        for bucket in ([r for t, r in lowered if t.startswith(ql)], [r for t, r in lowered if ql in t]):
-            if bucket:
-                return self._to_identity(min(bucket, key=lambda r: len(str(r["title"]))))
+        prefix_matches = [r for t, r in lowered if t.startswith(ql)]
+        if prefix_matches:
+            # Shortest title wins: the parent entity rather than a longer subsidiary or fund.
+            return self._to_identity(min(prefix_matches, key=lambda r: len(str(r["title"]))))
 
+        # Fuzzy matching absorbs suffix differences ("Nvidia Corporation" -> "NVIDIA CORP"), but on its own
+        # it also matches a bare generic word to whichever filer happens to score highest ("Holdings" ->
+        # "Star Holdings"). Requiring the leading word to agree keeps the useful case and drops that one.
         best = difflib.get_close_matches(ql, [t for t, _ in lowered], n=1, cutoff=RESOLVE_CUTOFF)
-        if best:
+        if best and _leading_word(best[0]) == _leading_word(ql):
             for title, r in lowered:
                 if title == best[0]:
                     return self._to_identity(r)
