@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meridian.db.models import LLMUsageModel, ToolCallModel
+from meridian.db.repositories._batch import batched_rows
 from meridian.schemas.api import UsageBreakdown
 from meridian.schemas.telemetry import LLMUsage, ToolCallRecord
 
@@ -39,23 +40,24 @@ class TelemetryRepository:
             }
             for r in records
         ]
-        stmt = pg_insert(ToolCallModel).values(values)
-        update_cols = {
-            c: stmt.excluded[c]
-            for c in (
-                "agent",
-                "tool",
-                "arguments",
-                "status",
-                "duration_ms",
-                "result_summary",
-                "error",
-                "attempts",
-                "at",
+        update_cols_tc = (
+            "agent",
+            "tool",
+            "arguments",
+            "status",
+            "duration_ms",
+            "result_summary",
+            "error",
+            "attempts",
+            "at",
+        )
+        for chunk in batched_rows(values, columns_per_row=11):
+            stmt = pg_insert(ToolCallModel).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[ToolCallModel.session_id, ToolCallModel.id],
+                set_={c: stmt.excluded[c] for c in update_cols_tc},
             )
-        }
-        stmt = stmt.on_conflict_do_update(index_elements=[ToolCallModel.session_id, ToolCallModel.id], set_=update_cols)
-        await self._session.execute(stmt)
+            await self._session.execute(stmt)
 
     async def save_usage(self, session_id: str, usage: list[LLMUsage]) -> None:
         if not usage:

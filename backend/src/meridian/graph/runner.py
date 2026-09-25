@@ -71,8 +71,21 @@ class _RouterEventSink:
         self._subscribers = subscribers
 
     async def emit(self, event: ProgressEvent) -> None:
-        seq = await self._store.save_event(event.session_id, event)
-        event.seq = seq
+        """Record progress, then fan out to live subscribers.
+
+        Reporting progress must never be able to fail a research run: a storage error here once
+        propagated out of an agent node and silently stalled the whole run. The event is dropped from
+        the durable log if it cannot be written, logged, and still delivered to anyone watching.
+        """
+        try:
+            event.seq = await self._store.save_event(event.session_id, event)
+        except Exception as exc:
+            log.warning(
+                "progress_event_not_persisted",
+                session_id=event.session_id,
+                event_type=event.type.value,
+                error=str(exc),
+            )
         for queue in list(self._subscribers.get(event.session_id, [])):
             queue.put_nowait(event)
 

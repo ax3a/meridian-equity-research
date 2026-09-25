@@ -14,9 +14,11 @@ from meridian.rag.types import ChunkMetadata, DocumentChunk
 
 pytestmark = pytest.mark.integration
 
-DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get(
-    "DATABASE_URL", "postgresql+asyncpg://meridian:meridian@localhost:5432/meridian"
+# A dedicated test database, never the development one: this fixture DROPs its tables at teardown.
+DATABASE_URL = os.environ.get("MERIDIAN_TEST_DATABASE_URL") or os.environ.get(
+    "TEST_DATABASE_URL", "postgresql+asyncpg://meridian:meridian@localhost:5432/meridian_test"
 )
+_DB_NAME = DATABASE_URL.rsplit("/", 1)[-1].split("?", 1)[0]
 
 _DDL = """
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -59,6 +61,8 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 
 @pytest.fixture
 async def engine() -> AsyncIterator[AsyncEngine]:
+    if not _DB_NAME.endswith("_test"):
+        pytest.skip(f"refusing to drop tables in {_DB_NAME!r}; use a database whose name ends in '_test'")
     eng = create_async_engine(DATABASE_URL, pool_pre_ping=True)
     try:
         async with eng.connect() as conn:

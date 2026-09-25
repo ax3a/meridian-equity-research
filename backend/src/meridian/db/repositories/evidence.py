@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meridian.db.models import EvidenceModel, FindingModel, SourceModel
+from meridian.db.repositories._batch import batched_rows
 from meridian.schemas.citations import Evidence, EvidenceLocator, Source
 from meridian.schemas.findings import Finding
 
@@ -82,24 +83,25 @@ class EvidenceRepository:
             }
             for s in sources
         ]
-        stmt = pg_insert(SourceModel).values(values)
-        update_cols = {
-            c: stmt.excluded[c]
-            for c in (
-                "kind",
-                "title",
-                "url",
-                "publisher",
-                "provider",
-                "published_at",
-                "retrieved_at",
-                "is_snapshot",
-                "snapshot_date",
-                "metadata",
+        update_cols_src = (
+            "kind",
+            "title",
+            "url",
+            "publisher",
+            "provider",
+            "published_at",
+            "retrieved_at",
+            "is_snapshot",
+            "snapshot_date",
+            "metadata",
+        )
+        for chunk in batched_rows(values, columns_per_row=12):
+            stmt = pg_insert(SourceModel).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[SourceModel.session_id, SourceModel.id],
+                set_={c: stmt.excluded[c] for c in update_cols_src},
             )
-        }
-        stmt = stmt.on_conflict_do_update(index_elements=[SourceModel.session_id, SourceModel.id], set_=update_cols)
-        await self._session.execute(stmt)
+            await self._session.execute(stmt)
 
     async def save_evidence(self, session_id: str, evidence: list[Evidence]) -> None:
         if not evidence:
@@ -115,10 +117,13 @@ class EvidenceRepository:
             }
             for e in evidence
         ]
-        stmt = pg_insert(EvidenceModel).values(values)
-        update_cols = {c: stmt.excluded[c] for c in ("source_id", "locator", "text", "injection_flags")}
-        stmt = stmt.on_conflict_do_update(index_elements=[EvidenceModel.session_id, EvidenceModel.id], set_=update_cols)
-        await self._session.execute(stmt)
+        for chunk in batched_rows(values, columns_per_row=6):
+            stmt = pg_insert(EvidenceModel).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[EvidenceModel.session_id, EvidenceModel.id],
+                set_={c: stmt.excluded[c] for c in ("source_id", "locator", "text", "injection_flags")},
+            )
+            await self._session.execute(stmt)
 
     async def save_findings(self, session_id: str, findings: list[Finding]) -> None:
         if not findings:
@@ -140,24 +145,25 @@ class EvidenceRepository:
             }
             for f in findings
         ]
-        stmt = pg_insert(FindingModel).values(values)
-        update_cols = {
-            c: stmt.excluded[c]
-            for c in (
-                "agent",
-                "section",
-                "claim",
-                "kind",
-                "evidence_ids",
-                "metric_refs",
-                "confidence",
-                "category",
-                "status",
-                "revision",
+        update_cols_find = (
+            "agent",
+            "section",
+            "claim",
+            "kind",
+            "evidence_ids",
+            "metric_refs",
+            "confidence",
+            "category",
+            "status",
+            "revision",
+        )
+        for chunk in batched_rows(values, columns_per_row=12):
+            stmt = pg_insert(FindingModel).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[FindingModel.session_id, FindingModel.id],
+                set_={c: stmt.excluded[c] for c in update_cols_find},
             )
-        }
-        stmt = stmt.on_conflict_do_update(index_elements=[FindingModel.session_id, FindingModel.id], set_=update_cols)
-        await self._session.execute(stmt)
+            await self._session.execute(stmt)
 
     async def list_sources(self, session_id: str) -> list[Source]:
         stmt = select(SourceModel).where(SourceModel.session_id == session_id)

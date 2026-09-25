@@ -101,6 +101,10 @@ class ResearchRepository:
                 updated_at=now,
             )
         )
+        # Flush (not commit) so the row exists for the rest of this transaction. Everything written
+        # during a run -- tool calls, usage, evidence, findings -- carries a foreign key to this session,
+        # and the unit of work does not otherwise guarantee the parent insert is ordered first.
+        await self._session.flush()
 
     async def get(self, session_id: str) -> ResearchRecord | None:
         row = await self._session.get(ResearchSessionModel, session_id)
