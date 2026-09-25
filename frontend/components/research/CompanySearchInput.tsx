@@ -48,7 +48,8 @@ export function CompanySearchInput({ onSelect }: CompanySearchInputProps) {
   return (
     <div className="relative">
       <label htmlFor="company-search" className="mb-1 block text-sm font-medium text-ink-200">
-        Company <span className="font-normal text-ink-500">(optional — helps resolve an ambiguous query)</span>
+        Pin to a specific company{" "}
+        <span className="font-normal text-ink-500">(optional — start typing a ticker or name)</span>
       </label>
       <input
         id="company-search"

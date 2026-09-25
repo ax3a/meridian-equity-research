@@ -65,23 +65,38 @@ export default function NewResearchPage() {
     <div className="mx-auto max-w-2xl">
       <PageHeader title="New Research" subtitle="Describe what you want Meridian's agents to investigate." />
       <form onSubmit={handleSubmit} className="space-y-6">
-        <CompanySearchInput onSelect={setCompany} />
-
+        {/* The request is the primary input and comes first. The company picker used to sit above it,
+            wider and unlabelled as optional, so people typed their whole request into the picker and
+            left the actual request empty. */}
         <div>
           <label htmlFor="research-query" className="mb-1 block text-sm font-medium text-ink-200">
-            Research request
+            What should we research?
           </label>
           <textarea
             id="research-query"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             rows={4}
+            autoFocus
             placeholder="Analyse NVIDIA with particular attention to AI infrastructure growth, margins and valuation."
             required
             minLength={2}
             maxLength={2000}
             className="w-full rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-500 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
           />
+          <p className="mt-1 text-xs text-ink-400">
+            Plain English is fine. The company is identified from what you write — you only need the field
+            below if the name is ambiguous.
+          </p>
+        </div>
+
+        <div>
+          <CompanySearchInput onSelect={setCompany} />
+          {company && (
+            <p className="mt-1 text-xs text-ink-400">
+              Pinned to {company.name} ({company.ticker}).
+            </p>
+          )}
         </div>
 
         <div>
