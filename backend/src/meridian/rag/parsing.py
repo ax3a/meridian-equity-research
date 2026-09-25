@@ -9,9 +9,10 @@ chunking can derive a page number for citations.
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass, field
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag, XMLParsedAsHTMLWarning
 
 _STRIP_TAGS = {"script", "style", "noscript"}
 _PARAGRAPH_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "blockquote"}
@@ -143,7 +144,11 @@ def _walk(node: Tag, builder: _Builder) -> None:
 
 
 def parse_filing_html(html: str) -> ParsedDocument:
-    soup = BeautifulSoup(html, "lxml")
+    # EDGAR serves a mix of HTML and XML-declared XHTML; the HTML parser handles both, and warning
+    # about it on every filing would drown out real log output.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        soup = BeautifulSoup(html, "lxml")
 
     for tag in soup.find_all(list(_STRIP_TAGS)):
         tag.decompose()
