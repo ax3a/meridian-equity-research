@@ -7,19 +7,22 @@ evidence id a tool actually returned.
 from __future__ import annotations
 
 from meridian.agents.base import AgentAnswer, AgentDraft, BaseAgent
+from meridian.agents.claims import describe_claim
 from meridian.schemas.enums import AgentName, Confidence, FindingKind, ReportSection
 from meridian.schemas.findings import Finding
 from meridian.schemas.research import ResearchTask
 from meridian.schemas.state import ResearchState
 from meridian.tools.base import ToolContext
 
-_QUERIES: tuple[tuple[str, ReportSection], ...] = (
-    ("management discussion and analysis of results of operations", ReportSection.FINANCIAL_PERFORMANCE),
-    ("business segments and revenue disaggregation", ReportSection.FINANCIAL_PERFORMANCE),
-    ("risk factors", ReportSection.KEY_RISKS),
-    ("forward-looking guidance and outlook", ReportSection.RECENT_DEVELOPMENTS),
-    ("changes in accounting policies or critical estimates", ReportSection.RECENT_DEVELOPMENTS),
-    ("material events and subsequent events", ReportSection.RECENT_DEVELOPMENTS),
+# (retrieval query, report section, short label used when quoting the passage as a claim). The query is
+# written for retrieval quality; the label is written to read well in a report sentence.
+_QUERIES: tuple[tuple[str, ReportSection, str], ...] = (
+    ("management discussion and analysis of results of operations", ReportSection.FINANCIAL_PERFORMANCE, "MD&A"),
+    ("business segments and revenue disaggregation", ReportSection.FINANCIAL_PERFORMANCE, "Segment disclosure"),
+    ("risk factors", ReportSection.KEY_RISKS, "Risk factor"),
+    ("forward-looking guidance and outlook", ReportSection.RECENT_DEVELOPMENTS, "Guidance"),
+    ("changes in accounting policies or critical estimates", ReportSection.RECENT_DEVELOPMENTS, "Accounting policy"),
+    ("material events and subsequent events", ReportSection.RECENT_DEVELOPMENTS, "Material event"),
 )
 
 
@@ -61,7 +64,7 @@ class FilingsAgent(BaseAgent):
         await self.tool(ctx, "list_filings", ticker=ticker, forms=["10-K", "10-Q", "8-K"], limit=12)
         await self.tool(ctx, "index_filings", ticker=ticker, forms=["10-K", "10-Q"], limit=3)
 
-        for query, section in _QUERIES:
+        for query, section, label in _QUERIES:
             inv = await self.tool(ctx, "search_filings", ticker=ticker, query=query, k=2)
             if not inv.ok or inv.output is None or not inv.output.passages:
                 continue
@@ -74,7 +77,7 @@ class FilingsAgent(BaseAgent):
                 # collides as a "duplicate claim" during citation validation (which dedups on claim text).
                 findings.append(
                     self.finding(
-                        f"[{query}] {text}",
+                        describe_claim(label, text),
                         FindingKind.FACT,
                         section,
                         evidence_ids=[getattr(hit, "evidence_id", "")],

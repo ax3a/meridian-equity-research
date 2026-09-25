@@ -8,6 +8,7 @@ skipped -- never fabricated.
 from __future__ import annotations
 
 from meridian.agents.base import AgentAnswer, AgentDraft, BaseAgent
+from meridian.agents.claims import describe_claim
 from meridian.schemas.enums import AgentName, Confidence, FindingKind, ReportSection, RiskCategory
 from meridian.schemas.findings import Finding
 from meridian.schemas.research import ResearchTask
@@ -102,7 +103,7 @@ class RiskAgent(BaseAgent):
             # as a "duplicate claim" during citation validation (which dedups on claim text alone).
             findings.append(
                 self.finding(
-                    f"[{category.value}] {text}",
+                    describe_claim(category.value, text),
                     FindingKind.FACT,
                     ReportSection.KEY_RISKS,
                     evidence_ids=[evidence_id],

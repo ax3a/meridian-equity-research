@@ -10,38 +10,14 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from meridian.agents.base import AgentAnswer, AgentDraft, BaseAgent
+from meridian.agents.claims import describe_claim
+from meridian.agents.stance import bull_candidates, rank_by_stance
 from meridian.core.config import LLMTier
 from meridian.schemas.enums import AgentName, FindingKind, ReportSection
 from meridian.schemas.findings import Finding
 from meridian.schemas.research import ResearchTask
 from meridian.schemas.state import ResearchState
 from meridian.tools.base import ToolContext
-
-_POSITIVE_HINTS = (
-    "growth",
-    "grew",
-    "increase",
-    "margin expansion",
-    "strong",
-    "record",
-    "beat",
-    "upside",
-    "opportunity",
-    "leadership",
-    "moat",
-    "cash",
-    "profit",
-    "accelerat",
-    "expand",
-)
-
-
-def _rank(findings: list[Finding], hints: tuple[str, ...]) -> list[Finding]:
-    def score(f: Finding) -> int:
-        text = f.claim.lower()
-        return sum(text.count(h) for h in hints)
-
-    return sorted(findings, key=score, reverse=True)
 
 
 def _candidate_dict(f: Finding) -> dict[str, Any]:
@@ -66,11 +42,7 @@ class Bull(BaseAgent):
     allowed_tools: ClassVar[frozenset[str]] = frozenset({"lookup_evidence", "search_filings"})
 
     async def run(self, task: ResearchTask, state: ResearchState, ctx: ToolContext) -> AgentDraft:
-        candidates = [
-            f
-            for f in state.findings()
-            if f.agent not in (AgentName.BULL, AgentName.BEAR) and (f.evidence_ids or f.metric_refs)
-        ]
+        candidates = bull_candidates(state)
         if self.generative:
             context = {"candidate_findings": [_candidate_dict(f) for f in candidates[:30]]}
             answer = await self.llm_research(
@@ -84,13 +56,13 @@ class Bull(BaseAgent):
                 context=context,
             )
             return AgentDraft(summary=answer.summary, findings=self.to_findings(answer))
-        return self._offline_draft(candidates)
+        return self._offline_draft(candidates, state)
 
-    def _offline_draft(self, candidates: list[Finding]) -> AgentDraft:
-        picked = _rank(candidates, _POSITIVE_HINTS)[:6]
+    def _offline_draft(self, candidates: list[Finding], state: ResearchState) -> AgentDraft:
+        picked = rank_by_stance(candidates, stance="bull", state=state)[:6]
         findings = [
             self.finding(
-                f"Bull case: {f.claim}",
+                describe_claim("Bull case", f.claim),
                 FindingKind.INTERPRETATION,
                 ReportSection.BULL_CASE,
                 evidence_ids=f.evidence_ids,

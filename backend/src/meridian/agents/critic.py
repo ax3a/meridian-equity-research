@@ -111,27 +111,56 @@ _NEGATIVE_WORDS = {
 }
 
 
-def parse_figures(text: str) -> list[float]:
-    """Extract numeric figures from free text, handling "$245.1B", "245,122 million" and "15.7%"."""
-    out: list[float] = []
+def parse_figures_with_precision(text: str) -> list[tuple[float, float]]:
+    """Like `parse_figures`, but also returns each figure's display-precision half-ULP tolerance.
+
+    A claim's literal precision matters: "0.09x" is a display-rounded figure and should match a metric of
+    0.0910831 (same number rounded to 2dp), but "0.5x" should not match 0.09 -- that is a genuine mismatch.
+    Returns ``(value, abs_tolerance)`` pairs, both already scaled to the same unit (percent -> ratio,
+    "$245.1B" -> raw dollars), so `abs_tolerance` can be compared directly against a metric's raw value.
+    """
+    out: list[tuple[float, float]] = []
     for sign, num, suffix, pct in _NUMBER_RE.findall(text):
         if not num:
             continue
-        value = float(num.replace(",", ""))
+        raw = num.replace(",", "")
+        decimals = len(raw.split(".", 1)[1]) if "." in raw else 0
+        half_ulp = 0.5 * (10**-decimals)
+        value = float(raw)
         if sign:
             value = -value
+        scale = 1.0
         if pct:
-            value /= 100.0
+            scale = 0.01
         elif suffix:
-            value *= _SUFFIX_MULT[suffix.lower()]
-        out.append(value)
+            scale = _SUFFIX_MULT[suffix.lower()]
+        out.append((value * scale, half_ulp * scale))
     return out
+
+
+def parse_figures(text: str) -> list[float]:
+    """Extract numeric figures from free text, handling "$245.1B", "245,122 million" and "15.7%"."""
+    return [value for value, _ in parse_figures_with_precision(text)]
 
 
 def within_tolerance(value: float, target: float, rel: float = _NUMBER_TOLERANCE) -> bool:
     if target == 0:
         return abs(value) < 1e-9
     return abs(value - target) / abs(target) <= rel
+
+
+def figure_matches(
+    metric_value: float, parsed_value: float, precision_tolerance: float, rel: float = _NUMBER_TOLERANCE
+) -> bool:
+    """True if a claim's displayed figure plausibly represents `metric_value`.
+
+    Accepts either explanation: the claim is `metric_value` rounded to the precision it was written at
+    (`precision_tolerance`, from `parse_figures_with_precision`), or it is within the standard 1% relative
+    tolerance of the full-precision value. The two are combined (not replaced) so a rounded, correct figure
+    is never flagged, while a genuine mismatch -- a different number entirely -- still is.
+    """
+    tolerance = max(precision_tolerance, abs(metric_value) * rel)
+    return abs(metric_value - parsed_value) <= tolerance
 
 
 def _direction(text: str) -> str | None:
@@ -183,14 +212,14 @@ def _check_missing_fact_evidence(state: ResearchState) -> list[CriticIssue]:
 
 
 def _check_calculated_numbers(state: ResearchState) -> list[CriticIssue]:
-    """A CALCULATED finding's stated figure must agree with the metrics table within 1%."""
+    """A CALCULATED finding's stated figure must agree with the metrics table (respecting display precision)."""
     issues: list[CriticIssue] = []
     if not state.metrics:
         return issues
     for f in state.findings():
         if f.kind != FindingKind.CALCULATED or not f.metric_refs:
             continue
-        parsed = parse_figures(f.claim)
+        parsed = parse_figures_with_precision(f.claim)
         if not parsed:
             continue
         bad: list[tuple[str, float]] = []
@@ -198,7 +227,7 @@ def _check_calculated_numbers(state: ResearchState) -> list[CriticIssue]:
             mv = state.metrics.values.get(ref)
             if mv is None or mv.value is None:
                 continue
-            if not any(within_tolerance(p, mv.value) for p in parsed):
+            if not any(figure_matches(mv.value, value, precision_tol) for value, precision_tol in parsed):
                 bad.append((ref, mv.value))
         if bad:
             desc = "; ".join(
@@ -252,8 +281,17 @@ def _check_stale_recent_developments(
     return issues
 
 
+_ARGUING_AGENTS = frozenset({AgentName.BULL, AgentName.BEAR})
+
+
 def _check_near_duplicates(state: ResearchState) -> list[CriticIssue]:
-    """Flag near-identical claims made by different agents (each agent's own duplicates are already deduped)."""
+    """Flag near-identical claims made by different agents (each agent's own duplicates are already deduped).
+
+    Bull/bear are *expected* to restate points already surfaced by the research agents they argue from --
+    that is their job, not a defect -- so a duplicate involving either of them is noise, not a real issue,
+    and is downgraded to LOW so it is visible but never blocks approval. A duplicate between two independent
+    research agents is a genuine redundancy and stays MEDIUM.
+    """
     issues: list[CriticIssue] = []
     findings = state.findings()
     seen: list[tuple[int, str]] = []
@@ -264,14 +302,24 @@ def _check_near_duplicates(state: ResearchState) -> list[CriticIssue]:
             if other.agent == f.agent:
                 continue
             if difflib.SequenceMatcher(None, norm, prior_norm).ratio() >= _DUPLICATE_SIMILARITY:
+                is_argument_reuse = bool({f.agent, other.agent} & _ARGUING_AGENTS)
+                if is_argument_reuse:
+                    description = (
+                        f"restates a point already made by {other.agent.value} -- expected when arguing "
+                        "the bull/bear case from existing findings"
+                    )
+                    suggested_fix = None
+                else:
+                    description = f"near-duplicate of a claim by {other.agent.value}: {other.claim[:120]!r}"
+                    suggested_fix = "Remove the redundant claim or cross-reference the original."
                 issues.append(
                     CriticIssue(
                         agent=f.agent,
                         finding_id=f.id,
                         issue_type=CriticIssueType.DUPLICATION,
-                        severity=Severity.MEDIUM,
-                        description=f"near-duplicate of a claim by {other.agent.value}: {other.claim[:120]!r}",
-                        suggested_fix="Remove the redundant claim or cross-reference the original.",
+                        severity=Severity.LOW if is_argument_reuse else Severity.MEDIUM,
+                        description=description,
+                        suggested_fix=suggested_fix,
                     )
                 )
                 break
@@ -377,7 +425,7 @@ class Critic(BaseAgent):
             issues += llm_issues
             checks_run.append("llm_pass")
 
-        updated_outputs, rework_notes, reviews = self._apply_issues(state, issues)
+        updated_outputs, rework_notes, reviews, approved_count, rejected_count = self._apply_issues(state, issues)
         has_high = any(i.severity == Severity.HIGH for i in issues)
         can_loop = state.revision_round < self.deps.settings.max_revision_rounds
         if has_high and can_loop:
@@ -390,7 +438,7 @@ class Critic(BaseAgent):
         review_obj = CriticReview(
             round=state.revision_round,
             overall_verdict=overall,
-            summary=_summarize(issues, overall),
+            summary=_summarize(issues, overall, approved_count=approved_count, rejected_count=rejected_count),
             reviews=reviews,
             checks_run=checks_run,
         )
@@ -446,7 +494,7 @@ class Critic(BaseAgent):
 
     def _apply_issues(
         self, state: ResearchState, issues: list[CriticIssue]
-    ) -> tuple[dict[str, AgentOutput], dict[str, str], list[SectionReview]]:
+    ) -> tuple[dict[str, AgentOutput], dict[str, str], list[SectionReview], int, int]:
         worst: dict[str, Severity] = {}
         for issue in issues:
             if issue.finding_id is None:
@@ -456,6 +504,8 @@ class Critic(BaseAgent):
                 worst[issue.finding_id] = issue.severity
 
         updated_outputs: dict[str, AgentOutput] = {}
+        approved_count = 0
+        rejected_count = 0
         for agent_str, out in state.outputs.items():
             new_findings: list[Finding] = []
             changed = False
@@ -466,11 +516,20 @@ class Critic(BaseAgent):
                     new_status = FindingStatus.REJECTED
                 elif sev == Severity.MEDIUM and f.status != FindingStatus.REJECTED:
                     new_status = FindingStatus.UNVERIFIED
+                elif f.status == FindingStatus.DRAFT:
+                    # Survived every deterministic check (and the LLM pass, when it ran) with no HIGH/MEDIUM
+                    # issue of its own: this is the critic's explicit sign-off. DRAFT means "not yet
+                    # reviewed" -- it must never reach the report writer unreviewed.
+                    new_status = FindingStatus.APPROVED
                 if new_status != f.status:
                     changed = True
                     new_findings.append(f.model_copy(update={"status": new_status}))
                 else:
                     new_findings.append(f)
+                if new_status == FindingStatus.APPROVED:
+                    approved_count += 1
+                elif new_status == FindingStatus.REJECTED:
+                    rejected_count += 1
             if changed:
                 updated_outputs[agent_str] = out.model_copy(update={"findings": new_findings})
 
@@ -497,14 +556,21 @@ class Critic(BaseAgent):
             if verdict != Verdict.APPROVED:
                 high_notes = "; ".join(i.description for i in my_issues if i.severity == Severity.HIGH)
                 rework_notes[agent_str] = high_notes or "critic flagged high-severity issues; see review for detail."
-        return updated_outputs, rework_notes, reviews
+        return updated_outputs, rework_notes, reviews, approved_count, rejected_count
 
 
-def _summarize(issues: list[CriticIssue], overall: Verdict) -> str:
+def _summarize(issues: list[CriticIssue], overall: Verdict, *, approved_count: int = 0, rejected_count: int = 0) -> str:
     if not issues:
         return "All findings are supported by real evidence or computed metrics; no issues found."
     counts: dict[Severity, int] = defaultdict(int)
     for i in issues:
         counts[i.severity] += 1
     parts = [f"{counts[s]} {s.value}" for s in (Severity.HIGH, Severity.MEDIUM, Severity.LOW) if counts[s]]
-    return f"Found {len(issues)} issue(s) ({', '.join(parts)}); overall verdict: {overall.value}."
+    summary = f"Found {len(issues)} issue(s) ({', '.join(parts)}); overall verdict: {overall.value}."
+    if overall == Verdict.REJECTED:
+        summary += (
+            f" Revision cap reached: {rejected_count} finding(s) with an unresolved high-severity issue "
+            f"were rejected and excluded from the report; the other {approved_count} approved finding(s) "
+            "are unaffected and still appear."
+        )
+    return summary

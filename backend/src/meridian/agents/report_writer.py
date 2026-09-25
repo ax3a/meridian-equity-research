@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from meridian.agents import report_assembly
 from meridian.agents.base import AgentDraft, BaseAgent
+from meridian.agents.claims import describe_claim
 from meridian.agents.contracts import WriterResult
 from meridian.agents.critic import parse_figures, within_tolerance
 from meridian.core.config import LLMTier
@@ -31,6 +32,7 @@ from meridian.core.errors import LLMOutputError, ValidationFailedError
 from meridian.core.ids import new_id, utcnow
 from meridian.core.logging import get_logger
 from meridian.schemas.enums import AgentName, FindingKind, FindingStatus, ReportSection
+from meridian.schemas.financials import MetricValue
 from meridian.schemas.findings import Finding
 from meridian.schemas.report import ReportParagraph, ReportSectionContent, ResearchReport
 from meridian.schemas.research import ResearchTask
@@ -200,7 +202,9 @@ class ReportWriter(BaseAgent):
         )
         bull = report_assembly.pick_best_finding([f for f in approved if f.section == ReportSection.BULL_CASE])
         bear = report_assembly.pick_best_finding([f for f in approved if f.section == ReportSection.BEAR_CASE])
-        risks = report_assembly.pick_top_findings([f for f in approved if f.section == ReportSection.KEY_RISKS], limit=2)
+        risks = report_assembly.pick_top_findings(
+            [f for f in approved if f.section == ReportSection.KEY_RISKS], limit=2
+        )
 
         picks = [f for f in (company, valuation, bull, bear) if f is not None]
         picks.extend(financials)
@@ -216,11 +220,16 @@ class ReportWriter(BaseAgent):
             [f for f in approved if f.agent == AgentName.COMPANY and f.section == ReportSection.COMPANY_OVERVIEW]
         )
         if company_finding is not None:
-            paragraphs.append(ReportParagraph(
-                text=f"{company_name} ({ticker}): {company_finding.claim}",
-                kind=company_finding.kind, evidence_ids=list(company_finding.evidence_ids),
-                metric_refs=list(company_finding.metric_refs), finding_ids=[company_finding.id],
-            ))
+            markers = "".join(f" [{eid}]" for eid in company_finding.evidence_ids)
+            paragraphs.append(
+                ReportParagraph(
+                    text=f"{company_name} ({ticker}): {company_finding.claim.rstrip('.')}.{markers}",
+                    kind=company_finding.kind,
+                    evidence_ids=list(company_finding.evidence_ids),
+                    metric_refs=list(company_finding.metric_refs),
+                    finding_ids=[company_finding.id],
+                )
+            )
         else:
             paragraphs.append(ReportParagraph(text=f"{company_name} ({ticker}).", kind=FindingKind.FACT))
 
@@ -242,13 +251,18 @@ class ReportWriter(BaseAgent):
         if bear_finding is not None:
             paragraphs.append(self._reused_paragraph("Bear case", bear_finding))
 
-        for risk_finding in report_assembly.pick_top_findings(
-            [f for f in approved if f.section == ReportSection.KEY_RISKS], limit=2
-        ):
+        # The bear case is usually built from a risk factor, so skip any risk that would restate the
+        # passage already quoted above -- a summary that says the same thing twice wastes the reader's time.
+        used_evidence = {eid for p in paragraphs for eid in p.evidence_ids}
+        risk_pool = [
+            f for f in approved if f.section == ReportSection.KEY_RISKS and not (set(f.evidence_ids) & used_evidence)
+        ]
+        for risk_finding in report_assembly.pick_top_findings(risk_pool, limit=2):
             paragraphs.append(self._reused_paragraph("Key risk", risk_finding))
 
         return ReportSectionContent(
-            section=ReportSection.EXECUTIVE_SUMMARY, title=_SECTION_TITLES[ReportSection.EXECUTIVE_SUMMARY],
+            section=ReportSection.EXECUTIVE_SUMMARY,
+            title=_SECTION_TITLES[ReportSection.EXECUTIVE_SUMMARY],
             paragraphs=paragraphs,
         )
 
@@ -256,11 +270,18 @@ class ReportWriter(BaseAgent):
         """Wrap an already-approved finding's own claim/citations as one executive-summary sentence.
 
         Reuses the finding's real evidence_ids/metric_refs/id rather than minting anything new, so the
-        sentence is exactly as traceable and honest (same `kind`) as the finding it came from.
+        sentence is exactly as traceable and honest (same `kind`) as the finding it came from. Evidence ids
+        are appended as visible `[ev_xxx]` markers, matching how every other section cites its sources.
         """
+        markers = "".join(f" [{eid}]" for eid in f.evidence_ids)
+        # describe_claim avoids "Bull case: Bull case: ..." when the finding already carries the label.
+        sentence = describe_claim(label, f.claim, max_chars=320).rstrip(".")
         return ReportParagraph(
-            text=f"{label}: {f.claim}", kind=f.kind, evidence_ids=list(f.evidence_ids),
-            metric_refs=list(f.metric_refs), finding_ids=[f.id],
+            text=f"{sentence}.{markers}",
+            kind=f.kind,
+            evidence_ids=list(f.evidence_ids),
+            metric_refs=list(f.metric_refs),
+            finding_ids=[f.id],
         )
 
     def _financial_headline_paragraph(self, state: ResearchState, approved: list[Finding]) -> ReportParagraph | None:
@@ -287,10 +308,11 @@ class ReportWriter(BaseAgent):
             return None
 
         text = f"For {period}, " + ", ".join(phrases) + "."
-        finding_ids = list(dict.fromkeys(
-            f.id for f in approved
-            if f.agent == AgentName.FINANCIALS and set(f.metric_refs) & set(picked_refs)
-        ))
+        finding_ids = list(
+            dict.fromkeys(
+                f.id for f in approved if f.agent == AgentName.FINANCIALS and set(f.metric_refs) & set(picked_refs)
+            )
+        )
         return ReportParagraph(text=text, kind=FindingKind.CALCULATED, metric_refs=picked_refs, finding_ids=finding_ids)
 
     async def _write_executive_summary_generative(
@@ -303,8 +325,12 @@ class ReportWriter(BaseAgent):
         context = {
             "findings": [
                 {
-                    "finding_id": f.id, "claim": f.claim, "kind": f.kind.value, "section": f.section.value,
-                    "evidence_ids": f.evidence_ids, "metric_refs": f.metric_refs,
+                    "finding_id": f.id,
+                    "claim": f.claim,
+                    "kind": f.kind.value,
+                    "section": f.section.value,
+                    "evidence_ids": f.evidence_ids,
+                    "metric_refs": f.metric_refs,
                 }
                 for f in candidates
             ],
@@ -432,7 +458,7 @@ class ReportWriter(BaseAgent):
         )
 
 
-def _numbers_not_grounded_in_metrics(paragraphs: list[DraftParagraph], known_values: list) -> list[float]:
+def _numbers_not_grounded_in_metrics(paragraphs: list[DraftParagraph], known_values: list[MetricValue]) -> list[float]:
     """Every numeric figure the model wrote must match some value in the metrics table (1% tolerance)."""
     numeric_values = [mv.value for mv in known_values if mv.value is not None]
     bad: list[float] = []

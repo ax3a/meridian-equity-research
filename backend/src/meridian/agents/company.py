@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from meridian.agents.base import AgentAnswer, AgentDraft, BaseAgent
+from meridian.agents.claims import describe_claim
 from meridian.schemas.enums import AgentName, Confidence, FindingKind, ReportSection
 from meridian.schemas.research import ResearchTask
 from meridian.schemas.state import ResearchState
@@ -109,7 +110,7 @@ class CompanyAgent(BaseAgent):
                 # collides as a "duplicate claim" during citation validation (which dedups on claim text).
                 findings.append(
                     self.finding(
-                        f"[{query}] {text}",
+                        describe_claim(query, text),
                         FindingKind.FACT,
                         ReportSection.BUSINESS_MODEL,
                         evidence_ids=[getattr(hit, "evidence_id", "")],

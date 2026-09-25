@@ -7,6 +7,7 @@ INTERPRETATION and is only ever produced with real supporting evidence ids.
 from __future__ import annotations
 
 from meridian.agents.base import AgentAnswer, AgentDraft, BaseAgent
+from meridian.agents.claims import describe_claim
 from meridian.schemas.enums import AgentName, Confidence, FindingKind, ReportSection
 from meridian.schemas.findings import Finding
 from meridian.schemas.research import ResearchTask
@@ -53,7 +54,7 @@ class NewsAgent(BaseAgent):
                 filed = getattr(event, "filed", None) or getattr(event, "filing_date", None)
                 findings.append(
                     self.finding(
-                        f"Filed 8-K (item(s) {items or 'n/a'}) on {filed}: {description[:400]}",
+                        describe_claim(f"Filed 8-K (item(s) {items or 'n/a'}) on {filed}", description),
                         FindingKind.FACT,
                         ReportSection.RECENT_DEVELOPMENTS,
                         evidence_ids=[evidence_id],

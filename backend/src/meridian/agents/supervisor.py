@@ -14,6 +14,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, Field
 
 from meridian.agents.base import AgentDraft, BaseAgent
+from meridian.agents.company_extraction import candidate_names
 from meridian.agents.contracts import PlanResult, ResolveResult, ReviewDecision
 from meridian.agents.critic import parse_figures, within_tolerance
 from meridian.core.config import LLMTier
@@ -91,13 +92,18 @@ class Supervisor(BaseAgent):
     # ---- resolve ----------------------------------------------------------------------------------------
     async def resolve(self, state: ResearchState) -> ResolveResult:
         ctx = self.new_context(state)
-        query = state.request.ticker or state.request.query
-        inv = await self.tool(ctx, "resolve_company", query=query)
-        if not inv.ok or inv.output is None:
-            raise CompanyNotFoundError(inv.error or f"could not resolve a company for {query!r}")
-        company = getattr(inv.output, "company", None)
+        # An explicit ticker wins; otherwise work through candidates extracted from the request text.
+        candidates = [state.request.ticker.strip()] if state.request.ticker else candidate_names(state.request.query)
+        company = None
+        for candidate in candidates:
+            inv = await self.tool(ctx, "resolve_company", query=candidate)
+            if inv.ok and inv.output is not None:
+                company = getattr(inv.output, "company", None)
+                if company is not None:
+                    break
         if company is None:
-            raise CompanyNotFoundError(f"resolve_company returned no company for {query!r}")
+            attempted = ", ".join(repr(c) for c in candidates[:6]) or repr(state.request.query)
+            raise CompanyNotFoundError(f"could not resolve a company from {state.request.query!r}; tried {attempted}")
         return ResolveResult(
             company=company,
             sources=ctx.ledger.sources,
