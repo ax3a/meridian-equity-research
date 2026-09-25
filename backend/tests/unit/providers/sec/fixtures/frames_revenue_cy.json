@@ -1,0 +1,47 @@
+{
+  "taxonomy": "us-gaap",
+  "tag": "Revenues",
+  "ccp": "CY2023",
+  "uom": "USD",
+  "label": "Revenues",
+  "description": "...",
+  "pts": 4,
+  "data": [
+    {
+      "accn": "0000000001-24-000001",
+      "cik": 1045810,
+      "entityName": "NVIDIA CORP",
+      "loc": "US-CA",
+      "start": "2023-01-01",
+      "end": "2023-12-31",
+      "val": 60922000000
+    },
+    {
+      "accn": "0000000002-24-000001",
+      "cik": 320193,
+      "entityName": "Apple Inc.",
+      "loc": "US-CA",
+      "start": "2023-01-01",
+      "end": "2023-12-31",
+      "val": 383285000000
+    },
+    {
+      "accn": "0000000003-24-000001",
+      "cik": 1067983,
+      "entityName": "Berkshire Hathaway Inc",
+      "loc": "US-NE",
+      "start": "2023-01-01",
+      "end": "2023-12-31",
+      "val": 364482000000
+    },
+    {
+      "accn": "0000000004-24-000001",
+      "cik": 999999,
+      "entityName": "PRIVATE NO TICKER CO",
+      "loc": "US-TX",
+      "start": "2023-01-01",
+      "end": "2023-12-31",
+      "val": 5000000000
+    }
+  ]
+}

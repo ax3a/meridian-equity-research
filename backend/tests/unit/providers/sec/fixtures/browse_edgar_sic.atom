@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+  <feed xmlns="http://www.w3.org/2005/Atom">
+    <author><email>webmaster@sec.gov</email><name>Webmaster</name></author>
+    <entry title="ARRAY(0x558d7b5b9458)">
+      <content type="text/xml">
+        <company-info name="ARRAY(0x558d7b5b9890)">
+          <cik>0001045810</cik>
+          <sic>3674</sic>
+        </company-info>
+      </content>
+      <id>urn:tag:www.sec.gov:cik=0001045810</id>
+      <link href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001045810" type="text/html" />
+      <updated>2026-09-24T17:29:32-04:00</updated>
+    </entry>
+    <entry title="ARRAY(0x558d7b5d68f0)">
+      <content type="text/xml">
+        <company-info name="ARRAY(0x558d7b5d67a0)">
+          <cik>0000320193</cik>
+          <sic>3674</sic>
+        </company-info>
+      </content>
+      <id>urn:tag:www.sec.gov:cik=0000320193</id>
+      <link href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000320193" type="text/html" />
+      <updated>2026-09-24T17:29:32-04:00</updated>
+    </entry>
+    <entry title="ARRAY(0x558d7b5d6900)">
+      <content type="text/xml">
+        <company-info name="ARRAY(0x558d7b5d6910)">
+          <cik>0000999999</cik>
+          <sic>3674</sic>
+        </company-info>
+      </content>
+      <id>urn:tag:www.sec.gov:cik=0000999999</id>
+      <link href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000999999" type="text/html" />
+      <updated>2026-09-24T17:29:32-04:00</updated>
+    </entry>
+  </feed>
