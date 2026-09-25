@@ -1,0 +1,39 @@
+# Normalise line endings for (almost) everything: store as LF in the repo, check out as LF on
+# every platform (including Windows) unless overridden below. This settles the CRLF warnings
+# Git prints on every commit from files edited in Windows tools.
+* text=auto eol=lf
+
+# Windows scripts are meant to be run/edited on Windows and some tools (Notepad, older
+# PowerShell hosts) are pickier about CRLF, so keep them as CRLF on checkout everywhere.
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+
+# Batch/CMD files are Windows-only by nature; always CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell scripts must stay LF even on Windows checkouts, or bash inside Linux containers /
+# WSL / the Docker entrypoint will fail on a stray \r in the shebang line.
+*.sh text eol=lf
+
+# Lockfile: normalise line endings and mark as generated so review UIs collapse it by default.
+frontend/package-lock.json text eol=lf linguist-generated=true
+
+# Generated/snapshot and cache-like data: keep out of language-stats and treat as opaque
+# blobs where it matters (avoid line-ending mangling of binary-ish or generated content).
+backend/tests/**/fixtures/** linguist-generated=true
+backend/snapshots/** linguist-generated=true text=auto eol=lf
+frontend/tsconfig.tsbuildinfo linguist-generated=true -diff
+
+# Explicit binary types (never touched by text normalisation, no matter the extension guess).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.db binary
+*.sqlite binary

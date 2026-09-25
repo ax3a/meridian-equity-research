@@ -27,6 +27,10 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Standalone output produces a self-contained server bundle (`.next/standalone`) that the
+  // production Docker image runs directly with `node server.js`, without needing `node_modules`
+  // or the rest of the workspace copied into the runtime image.
+  output: "standalone",
   async headers() {
     return [
       {

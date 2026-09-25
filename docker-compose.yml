@@ -25,5 +25,62 @@ services:
       timeout: 5s
       retries: 10
 
+  # --- Application services -----------------------------------------------------------------
+  # `db` and `redis` above have no profile, so `docker compose up` with no service names (or
+  # `make docker-up-deps` / `scripts/docker-up.ps1 -DepsOnly`) starts only the datastores — the
+  # normal local-dev setup, where you run the backend/frontend natively against them.
+  #
+  # `backend` and `frontend` are in the `full` profile: bring up the whole containerized stack
+  # with:
+  #   docker compose --profile full up -d --build
+  # (or `make docker-up` / `scripts/docker-up.ps1`, which do exactly that).
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    profiles: ["full"]
+    env_file:
+      - .env
+    environment:
+      # Inside the compose network, services reach Postgres/Redis by service name, not
+      # localhost — these override whatever localhost-oriented values are in .env.
+      DATABASE_URL: postgresql+asyncpg://meridian:meridian@db:5432/meridian
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    profiles: ["full"]
+    environment:
+      MERIDIAN_API_BASE_URL: http://backend:8000
+      # Must match the backend's own API_KEY (read from the root .env for compose variable
+      # substitution); leave API_KEY unset/blank in .env to run with no API-key auth.
+      MERIDIAN_API_KEY: ${API_KEY:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+
 volumes:
   meridian-db-data:

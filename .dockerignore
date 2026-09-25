@@ -1,0 +1,43 @@
+# Keeps `docker build`'s context small and fast. Without this, the daemon has to tar up
+# multi-gigabyte directories (backend/.venv, frontend/node_modules, .git) on every build; the
+# Dockerfiles under docker/ never COPY any of these, so excluding them changes nothing about
+# what ends up in the image.
+
+.git
+.github
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+backend/.venv/
+backend/venv/
+**/*.egg-info/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/htmlcov/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/coverage/
+**/*.tsbuildinfo
+
+# Secrets - never let a local .env leak into an image layer.
+.env
+.env.*
+!.env.example
+!frontend/.env.local.example
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docs/specs and eval results aren't needed inside either image.
+docs/
+evals/results/
+*.log
