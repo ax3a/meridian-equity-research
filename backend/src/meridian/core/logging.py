@@ -25,9 +25,7 @@ def configure_logging() -> None:
     for noisy in ("httpx", "httpcore", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    renderer: Any = (
-        structlog.processors.JSONRenderer() if settings.log_json else structlog.dev.ConsoleRenderer()
-    )
+    renderer: Any = structlog.processors.JSONRenderer() if settings.log_json else structlog.dev.ConsoleRenderer()
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,

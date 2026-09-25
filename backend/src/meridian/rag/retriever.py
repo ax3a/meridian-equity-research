@@ -6,6 +6,7 @@ Implements the frozen `meridian.rag.types.Retriever` protocol.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from meridian.core.ids import stable_id
@@ -39,75 +40,89 @@ class HybridRetriever:
         self.embedder = embedder
         self.filings_provider = filings_provider
         self.rerank = rerank
+        # Agents in the same wave request the same filings concurrently. Without a per-document lock each
+        # one fetches, parses and embeds the same 10-K, which cost minutes and pushed agents into timeout.
+        self._document_locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, document_id: str) -> asyncio.Lock:
+        lock = self._document_locks.get(document_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._document_locks[document_id] = lock
+        return lock
 
     async def ensure_indexed(self, company: CompanyIdentity, filings: list[FilingRef]) -> IndexReport:
         report = IndexReport()
         for filing in filings:
             document_id = stable_id("doc", filing.accession_number, filing.primary_document)
             try:
-                if await self.store.has_document(document_id):
-                    report.documents_skipped += 1
-                    continue
+                async with self._lock_for(document_id):
+                    # Re-check inside the lock: the agent that held it may have just indexed this document.
+                    if await self.store.has_document(document_id):
+                        report.documents_skipped += 1
+                        continue
 
-                result = await self.filings_provider.fetch_document(filing)
-                filing_doc = result.data
+                    result = await self.filings_provider.fetch_document(filing)
+                    filing_doc = result.data
 
-                parsed = parse_filing_html(filing_doc.html)
-                sections = split_sections(parsed.text, filing.form)
+                    parsed = parse_filing_html(filing_doc.html)
+                    sections = split_sections(parsed.text, filing.form)
 
-                chunks: list[DocumentChunk] = []
-                for section in sections:
-                    for draft in chunk_section(section):
-                        flags = injection.scan(draft.text)
-                        page = page_for_offset(parsed.page_breaks, draft.start_offset)
-                        metadata = ChunkMetadata(
-                            ticker=company.ticker,
-                            cik=company.cik,
-                            company=company.name,
-                            form=filing.form,
-                            filing_date=filing.filing_date,
-                            accession_number=filing.accession_number,
-                            section=section.title,
-                            section_key=section.key,
-                            source_url=filing.url,
-                            document_title=parsed.title or filing.description or f"{filing.form} {filing.filing_date}",
-                            page=page,
-                            chunk_index=draft.index,
-                            is_snapshot=result.is_snapshot,
-                        )
-                        chunk_id = stable_id("chk", document_id, section.key, draft.index)
-                        chunks.append(
-                            DocumentChunk(
-                                id=chunk_id,
-                                document_id=document_id,
-                                text=draft.text,
-                                token_count=draft.token_count,
-                                metadata=metadata,
-                                injection_flags=flags,
+                    chunks: list[DocumentChunk] = []
+                    for section in sections:
+                        for draft in chunk_section(section):
+                            flags = injection.scan(draft.text)
+                            page = page_for_offset(parsed.page_breaks, draft.start_offset)
+                            metadata = ChunkMetadata(
+                                ticker=company.ticker,
+                                cik=company.cik,
+                                company=company.name,
+                                form=filing.form,
+                                filing_date=filing.filing_date,
+                                accession_number=filing.accession_number,
+                                section=section.title,
+                                section_key=section.key,
+                                source_url=filing.url,
+                                document_title=parsed.title
+                                or filing.description
+                                or f"{filing.form} {filing.filing_date}",
+                                page=page,
+                                chunk_index=draft.index,
+                                is_snapshot=result.is_snapshot,
                             )
-                        )
+                            chunk_id = stable_id("chk", document_id, section.key, draft.index)
+                            chunks.append(
+                                DocumentChunk(
+                                    id=chunk_id,
+                                    document_id=document_id,
+                                    text=draft.text,
+                                    token_count=draft.token_count,
+                                    metadata=metadata,
+                                    injection_flags=flags,
+                                )
+                            )
 
-                if not chunks:
-                    report.failures.append(f"{filing.accession_number}: no chunks extracted from document")
-                    continue
+                    if not chunks:
+                        report.failures.append(f"{filing.accession_number}: no chunks extracted from document")
+                        continue
 
-                embeddings = await self.embedder.embed([c.text for c in chunks])
-                stored_doc = StoredDocument(
-                    id=document_id,
-                    ticker=company.ticker,
-                    cik=company.cik,
-                    company=company.name,
-                    form=filing.form,
-                    accession_number=filing.accession_number,
-                    filing_date=filing.filing_date,
-                    source_url=filing.url,
-                    title=parsed.title or filing.description or filing.form,
-                    is_snapshot=result.is_snapshot,
-                    content_hash=stable_id("hash", filing_doc.html),
-                )
-                await self.store.add_document(stored_doc, chunks, embeddings)
-                report.documents_indexed += 1
-                report.chunks_created += len(chunks)
+                    embeddings = await self.embedder.embed([c.text for c in chunks])
+                    stored_doc = StoredDocument(
+                        id=document_id,
+                        ticker=company.ticker,
+                        cik=company.cik,
+                        company=company.name,
+                        form=filing.form,
+                        accession_number=filing.accession_number,
+                        filing_date=filing.filing_date,
+                        source_url=filing.url,
+                        title=parsed.title or filing.description or filing.form,
+                        is_snapshot=result.is_snapshot,
+                        content_hash=stable_id("hash", filing_doc.html),
+                    )
+                    await self.store.add_document(stored_doc, chunks, embeddings)
+                    report.documents_indexed += 1
+                    report.chunks_created += len(chunks)
             except Exception as exc:
                 logger.warning("filing_index_failed", accession=filing.accession_number, error=str(exc))
                 report.failures.append(f"{filing.accession_number}: {exc}")

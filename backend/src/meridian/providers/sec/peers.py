@@ -105,6 +105,7 @@ class SecPeerUniverseProvider:
                     )
                 )
 
+        candidates = _drop_untradable(candidates)
         candidates.sort(key=lambda c: (c.revenue is None, -(c.revenue or 0)))
         return ProviderResult(data=candidates[:limit], provider=self.name, warnings=warnings)
 
@@ -118,3 +119,20 @@ def _parse_atom_ciks(xml_text: str) -> list[int]:
     ``<cik>...</cik>`` element is more robust here.
     """
     return [int(m) for m in _CIK_RE.findall(xml_text)]
+
+
+# Warrants, units and rights share an issuer's SIC code but are not comparable companies. SEC tickers
+# encode them as a suffix (NVDAW = warrant, NVDAU = unit, NVDAR = right) or with a dash/dot class marker.
+_NON_EQUITY_SUFFIXES = ("W", "U", "R", "WS", "RT")
+
+
+def _looks_untradable(ticker: str) -> bool:
+    t = ticker.upper()
+    if any(sep in t for sep in ("-W", ".W", "-U", ".U", "-R", ".R")):
+        return True
+    return len(t) >= 5 and any(t.endswith(s) for s in _NON_EQUITY_SUFFIXES)
+
+
+def _drop_untradable(candidates: list[PeerCandidate]) -> list[PeerCandidate]:
+    """Remove warrant/unit tickers and shells with no revenue, which are not meaningful comparables."""
+    return [c for c in candidates if not _looks_untradable(c.company.ticker) and (c.revenue is None or c.revenue > 0)]

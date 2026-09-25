@@ -57,7 +57,15 @@ _TRAIL_MARKERS = (
     " with respect to",
     " with ",
 )
-_TICKER_RE = re.compile(r"(?:\$|\()([A-Za-z]{1,5})(?:\)|\b)|(?<![\w$])([A-Z]{2,5})(?![\w.])")
+_EXPLICIT_TICKER_RE = re.compile(r"(?:\$|\()([A-Za-z]{1,5})(?:\)|\b)")
+_BARE_UPPER_RE = re.compile(r"(?<![\w$])([A-Z]{2,5})(?![\w.])")
+# Uppercase words that are ordinary vocabulary in a research request, not the company being researched.
+# Without this, "Analyse NVIDIA with attention to AI infrastructure" resolves the ticker AI (C3.ai).
+_NON_TICKER_UPPERCASE = {
+    "AI", "ML", "IT", "US", "USA", "UK", "EU", "CEO", "CFO", "CTO", "COO", "IPO", "ETF", "GDP", "CPI",
+    "FY", "TTM", "EPS", "PE", "ROE", "ROA", "ROI", "FCF", "EBIT", "SEC", "GAAP", "ESG", "API", "SAAS",
+    "B2B", "B2C", "R&D", "M&A", "YOY", "QOQ", "Q1", "Q2", "Q3", "Q4", "NYSE", "DCF", "EV", "CAGR",
+}
 _CAPITALISED_RUN_RE = re.compile(r"\b([A-Z][\w&.'-]*(?:\s+(?:of|and|for|the)\s+[A-Z][\w&.'-]*|\s+[A-Z][\w&.'-]*)*)")
 _STOPWORDS = {
     "analyse",
@@ -130,22 +138,26 @@ def candidate_names(query: str) -> list[str]:
         if cleaned not in candidates:
             candidates.append(cleaned)
 
-    # 1. An explicit ticker: "$AAPL", "(MSFT)" or a bare uppercase token. Validated later by resolution,
-    #    so a shouted word like "ANALYSE" costs only a failed lookup.
-    for explicit, bare in _TICKER_RE.findall(query):
-        token = explicit or bare
+    # 1. An explicitly marked ticker ("$AAPL", "(MSFT)") is unambiguous, so it outranks everything.
+    for token in _EXPLICIT_TICKER_RE.findall(query):
         if token and token.lower() not in _STOPWORDS:
             add(token.upper())
 
     core = _strip_trail(_strip_lead(query))
     add(core)
 
-    # 2. Capitalised runs ("Advanced Micro Devices"), longest first.
+    # 2. Capitalised runs ("Advanced Micro Devices"), longest first. These rank ABOVE bare uppercase
+    #    tokens: in "Analyse NVIDIA ... AI infrastructure", the company is the name, not the acronym.
     runs = sorted((m.group(1) for m in _CAPITALISED_RUN_RE.finditer(core or query)), key=len, reverse=True)
     for run in runs:
         add(run)
 
-    # 3. Individual meaningful words, as a last resort before the raw query.
+    # 3. Bare uppercase tokens that look like tickers, excluding ordinary research vocabulary.
+    for token in _BARE_UPPER_RE.findall(query):
+        if token.upper() not in _NON_TICKER_UPPERCASE and token.lower() not in _STOPWORDS:
+            add(token.upper())
+
+    # 4. Individual meaningful words, as a last resort before the raw query.
     for word in (core or query).split():
         if word.lower() not in _STOPWORDS:
             add(word)

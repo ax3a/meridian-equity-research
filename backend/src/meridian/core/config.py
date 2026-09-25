@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     require_approval_default: bool = True
     max_revision_rounds: int = 2
     max_supervisor_loops: int = 2
-    agent_timeout_seconds: float = 180.0
+    agent_timeout_seconds: float = 300.0
     graph_recursion_limit: int = 60
 
     otel_exporter_otlp_endpoint: str | None = None

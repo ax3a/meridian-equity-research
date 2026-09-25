@@ -54,6 +54,30 @@ def test_leading_capitalised_verb_is_not_mistaken_for_a_ticker():
     assert "ANALYSE" not in candidates or candidates.index("MICROSOFT") < candidates.index("ANALYSE")
 
 
+def test_an_acronym_in_the_focus_clause_does_not_beat_the_company_name():
+    """Regression: "Analyse NVIDIA with attention to AI infrastructure" researched C3.ai (ticker AI).
+
+    Bare uppercase tokens used to outrank company names, so a request about NVIDIA produced a full
+    report on an unrelated company — the worst kind of failure, because the output looks entirely valid.
+    """
+    candidates = candidate_names("Analyse NVIDIA with attention to AI infrastructure growth and margins")
+
+    assert candidates[0] == "NVIDIA"
+    assert _first_matching(
+        "Analyse NVIDIA with attention to AI infrastructure growth and margins", KNOWN | {"AI"}
+    ) == "NVIDIA"
+
+
+@pytest.mark.parametrize("vocabulary", ["AI", "ETF", "GDP", "CEO", "IPO", "ESG", "SAAS", "TTM"])
+def test_common_research_vocabulary_is_never_offered_as_a_bare_ticker(vocabulary):
+    assert vocabulary not in candidate_names(f"Analyse Microsoft with attention to {vocabulary} exposure")
+
+
+def test_an_explicitly_marked_ticker_is_still_honoured_even_if_it_looks_like_vocabulary():
+    # "$AI" is a deliberate ticker reference, unlike the word "AI" in prose.
+    assert "AI" in candidate_names("research $AI")
+
+
 def test_unknown_company_yields_candidates_but_no_match():
     query = "Analyse Nonexistent Fake Corp Ltd"
 

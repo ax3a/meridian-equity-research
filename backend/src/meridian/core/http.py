@@ -22,22 +22,24 @@ from meridian.providers.snapshots import SnapshotStore, request_key
 
 log = get_logger(__name__)
 
-ALLOWED_HOSTS: frozenset[str] = frozenset({
-    "www.sec.gov",
-    "data.sec.gov",
-    "efts.sec.gov",
-    "stooq.com",
-    "stooq.pl",
-    "api.gdeltproject.org",
-    "api.fiscaldata.treasury.gov",
-    "financialmodelingprep.com",
-    "www.alphavantage.co",
-    "finnhub.io",
-    "api.polygon.io",
-    "api.stlouisfed.org",
-    "query1.finance.yahoo.com",
-    "home.treasury.gov",
-})
+ALLOWED_HOSTS: frozenset[str] = frozenset(
+    {
+        "www.sec.gov",
+        "data.sec.gov",
+        "efts.sec.gov",
+        "stooq.com",
+        "stooq.pl",
+        "api.gdeltproject.org",
+        "api.fiscaldata.treasury.gov",
+        "financialmodelingprep.com",
+        "www.alphavantage.co",
+        "finnhub.io",
+        "api.polygon.io",
+        "api.stlouisfed.org",
+        "query1.finance.yahoo.com",
+        "home.treasury.gov",
+    }
+)
 
 # Requests per second per host. SEC fair-access policy caps at 10 req/s.
 HOST_RATE: dict[str, float] = {
@@ -135,18 +137,52 @@ class HttpClient:
             return {"User-Agent": self.settings.sec_user_agent}
         return {"User-Agent": "Meridian-Research/0.1"}
 
-    async def get_json(self, url: str, *, provider: str, policy: CachePolicy, params: dict[str, Any] | None = None,
-                       snapshot_transform: Callable[[Any], Any] | None = None) -> FetchResult:
-        return await self._get(url, provider=provider, policy=policy, params=params,
-                               content_type="json", snapshot_transform=snapshot_transform)
+    async def get_json(
+        self,
+        url: str,
+        *,
+        provider: str,
+        policy: CachePolicy,
+        params: dict[str, Any] | None = None,
+        snapshot_transform: Callable[[Any], Any] | None = None,
+    ) -> FetchResult:
+        return await self._get(
+            url,
+            provider=provider,
+            policy=policy,
+            params=params,
+            content_type="json",
+            snapshot_transform=snapshot_transform,
+        )
 
-    async def get_text(self, url: str, *, provider: str, policy: CachePolicy, params: dict[str, Any] | None = None,
-                       snapshot_transform: Callable[[Any], Any] | None = None) -> FetchResult:
-        return await self._get(url, provider=provider, policy=policy, params=params,
-                               content_type="text", snapshot_transform=snapshot_transform)
+    async def get_text(
+        self,
+        url: str,
+        *,
+        provider: str,
+        policy: CachePolicy,
+        params: dict[str, Any] | None = None,
+        snapshot_transform: Callable[[Any], Any] | None = None,
+    ) -> FetchResult:
+        return await self._get(
+            url,
+            provider=provider,
+            policy=policy,
+            params=params,
+            content_type="text",
+            snapshot_transform=snapshot_transform,
+        )
 
-    async def _get(self, url: str, *, provider: str, policy: CachePolicy, params: dict[str, Any] | None,
-                   content_type: ContentType, snapshot_transform: Callable[[Any], Any] | None) -> FetchResult:
+    async def _get(
+        self,
+        url: str,
+        *,
+        provider: str,
+        policy: CachePolicy,
+        params: dict[str, Any] | None,
+        content_type: ContentType,
+        snapshot_transform: Callable[[Any], Any] | None,
+    ) -> FetchResult:
         host = validate_url(url, self.allowed_hosts)
         cache_key = f"http:{provider}:{request_key(url, params)}"
         mode = self.settings.data_mode
@@ -179,8 +215,7 @@ class HttpClient:
             raise ProviderUnavailableError(provider, f"no recorded snapshot for {url[:160]}")
         return FetchResult(body=snap.body, url=url, from_snapshot=True, snapshot_date=snap.snapshot_date)
 
-    async def _fetch_live(self, host: str, url: str, params: dict[str, Any] | None,
-                          content_type: ContentType) -> Any:
+    async def _fetch_live(self, host: str, url: str, params: dict[str, Any] | None, content_type: ContentType) -> Any:
         throttle = self._throttles.setdefault(host, _Throttle(HOST_RATE.get(host, DEFAULT_RATE)))
         try:
             async for attempt in AsyncRetrying(
@@ -198,8 +233,7 @@ class HttpClient:
                     return resp.json() if content_type == "json" else resp.text
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
-            raise ProviderError(host, f"HTTP {code} for {url[:160]}", retryable=_retryable(exc),
-                                status=code) from exc
+            raise ProviderError(host, f"HTTP {code} for {url[:160]}", retryable=_retryable(exc), status=code) from exc
         except httpx.TransportError as exc:
             raise ProviderError(host, f"network error: {type(exc).__name__}") from exc
         except json.JSONDecodeError as exc:
