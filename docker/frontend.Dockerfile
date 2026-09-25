@@ -42,20 +42,20 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
+# The node images already ship a non-root `node` user at uid/gid 1000, so creating another user there
+# fails with "GID '1000' already exists". Reuse it rather than fighting the base image.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid 1000 nextjs \
-    && useradd --uid 1000 --gid nextjs --shell /usr/sbin/nologin --create-home nextjs
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Standalone output already contains a pruned node_modules with only what server.js needs.
-COPY --from=builder --chown=nextjs:nextjs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nextjs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nextjs /app/public ./public
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
 
-USER nextjs
+USER node
 
 EXPOSE 3000
 

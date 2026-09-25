@@ -2,6 +2,11 @@ import type { Metadata } from "next";
 import { NavBar } from "@/components/layout/NavBar";
 import "./globals.css";
 
+// Rendered per request so the CSP nonce from `middleware.ts` can be stamped onto Next.js's inline
+// hydration scripts: a statically prerendered page is cached without one, and its scripts are then
+// blocked by the policy, leaving a blank shell. Every page here renders live API data, so there is no
+// static output worth preserving.
+export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: {
     default: "Meridian Research",
