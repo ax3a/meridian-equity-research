@@ -11,9 +11,15 @@ from meridian.schemas.enums import AgentName, FeedbackAction, TaskStatus
 Depth = Literal["quick", "standard", "deep"]
 
 
+# Tickers are interpolated into provider URL paths, so they are constrained at the boundary rather than
+# trusted: letters, digits, dot and dash only. This blocks path traversal and CRLF before a request is
+# ever built (the SSRF host allowlist in core.http remains the primary control).
+TICKER_PATTERN = r"^[A-Za-z0-9.\-]{1,12}$"
+
+
 class CompanyIdentity(BaseModel):
     name: str
-    ticker: str
+    ticker: str = Field(pattern=TICKER_PATTERN)
     cik: str  # zero-padded 10 digits
     exchange: str | None = None
     sic: str | None = None
@@ -41,7 +47,7 @@ class CompanyIdentity(BaseModel):
 
 class ResearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=2000)
-    ticker: str | None = Field(default=None, max_length=12)
+    ticker: str | None = Field(default=None, pattern=TICKER_PATTERN)
     focus_areas: list[str] = Field(default_factory=list, max_length=10)
     depth: Depth = "standard"
     require_approval: bool | None = None
@@ -86,6 +92,6 @@ class ResearchPlan(BaseModel):
 class HumanFeedback(BaseModel):
     action: FeedbackAction
     agent: AgentName | None = None
-    ticker: str | None = Field(default=None, max_length=12)
+    ticker: str | None = Field(default=None, pattern=TICKER_PATTERN)
     comment: str | None = Field(default=None, max_length=2000)
     submitted_at: datetime | None = None

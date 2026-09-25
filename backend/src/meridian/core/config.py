@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     langsmith_api_key: SecretStr | None = None
     langsmith_project: str = "meridian"
 
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _blank_api_key_means_open(cls, v: object) -> object:
+        """A blank or whitespace-only API_KEY means "no auth", not "the key is whitespace"."""
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, v: object) -> object:
