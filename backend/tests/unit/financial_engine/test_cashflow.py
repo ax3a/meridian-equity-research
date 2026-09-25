@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from tests.unit.financial_engine.conftest import CAPEX_FY2024, FCF_FY2024, OCF_FY2024
 
 from meridian.financial_engine.cashflow import ebitda, free_cash_flow
+from tests.unit.financial_engine.conftest import CAPEX_FY2024, FCF_FY2024, OCF_FY2024
 
 
 class TestFreeCashFlow:

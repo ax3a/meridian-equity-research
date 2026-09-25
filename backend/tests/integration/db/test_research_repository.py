@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import pytest
+
+from meridian.db.repositories.research import ResearchRepository
+from meridian.schemas.enums import RunStatus
+from meridian.schemas.state import ResearchState
 from tests.integration.db.helpers import (
     make_agent_output,
     make_company,
@@ -14,10 +18,6 @@ from tests.integration.db.helpers import (
     make_task,
     unique_session_id,
 )
-
-from meridian.db.repositories.research import ResearchRepository
-from meridian.schemas.enums import RunStatus
-from meridian.schemas.state import ResearchState
 
 pytestmark = pytest.mark.integration
 

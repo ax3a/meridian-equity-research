@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from tests.unit.financial_engine.conftest import GROSS_PROFIT_FY2024, NET_INCOME_FY2024, REVENUE_FY2024
 
 from meridian.financial_engine.margins import (
     ebitda_margin,
@@ -10,6 +9,7 @@ from meridian.financial_engine.margins import (
     operating_margin,
     rd_intensity,
 )
+from tests.unit.financial_engine.conftest import GROSS_PROFIT_FY2024, NET_INCOME_FY2024, REVENUE_FY2024
 
 
 class TestGrossMargin:

@@ -3,6 +3,10 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+
+from meridian.core.errors import ValidationFailedError
+from meridian.financial_engine.metrics import calculate, compute_metrics
+from meridian.schemas.financials import FinancialPeriod, FinancialStatements, PeriodFinancials, Quote
 from tests.unit.financial_engine.conftest import (
     FCF_FY2024,
     GROSS_PROFIT_FY2024,
@@ -10,10 +14,6 @@ from tests.unit.financial_engine.conftest import (
     REVENUE_FY2023,
     REVENUE_FY2024,
 )
-
-from meridian.core.errors import ValidationFailedError
-from meridian.financial_engine.metrics import calculate, compute_metrics
-from meridian.schemas.financials import FinancialPeriod, FinancialStatements, PeriodFinancials, Quote
 
 
 class TestComputeMetricsAnnual:

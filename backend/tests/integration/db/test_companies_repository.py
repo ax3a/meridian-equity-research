@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from tests.integration.db.helpers import make_company
 
 from meridian.core.ids import new_id
 from meridian.db.repositories.companies import CompanyRepository
+from tests.integration.db.helpers import make_company
 
 pytestmark = pytest.mark.integration
 

@@ -86,8 +86,7 @@ class Tool(ABC, Generic[InT, OutT]):
         return str(output)[:6000]
 
     def spec(self) -> ToolSpec:
-        return ToolSpec(name=self.name, description=self.description,
-                        input_schema=self.input_model.model_json_schema())
+        return ToolSpec(name=self.name, description=self.description, input_schema=self.input_model.model_json_schema())
 
 
 class ToolInvocation(BaseModel):
@@ -146,16 +145,25 @@ class ToolRegistry:
         except Exception as exc:  # tool boundary: record and continue, never crash the agent
             error = f"{type(exc).__name__}: {exc}"
         record = ToolCallRecord(
-            id=new_id("tc"), agent=ctx.agent, tool=name, arguments=_safe_args(raw_args), status=status,
+            id=new_id("tc"),
+            agent=ctx.agent,
+            tool=name,
+            arguments=_safe_args(raw_args),
+            status=status,
             duration_ms=round((time.perf_counter() - started) * 1000, 1),
-            result_summary=summary[:300], error=error,
+            result_summary=summary[:300],
+            error=error,
         )
         ctx.calls.append(record)
-        await ctx.events.emit(ProgressEvent(
-            session_id=ctx.session_id, type=EventType.TOOL_CALLED, agent=ctx.agent,
-            message=f"{ctx.agent.value} called {name} ({status})",
-            data={"tool": name, "status": status, "duration_ms": record.duration_ms, "error": error},
-        ))
+        await ctx.events.emit(
+            ProgressEvent(
+                session_id=ctx.session_id,
+                type=EventType.TOOL_CALLED,
+                agent=ctx.agent,
+                message=f"{ctx.agent.value} called {name} ({status})",
+                data={"tool": name, "status": status, "duration_ms": record.duration_ms, "error": error},
+            )
+        )
         return ToolInvocation(ok=status == "ok", output=output, summary=summary, error=error, record=record)
 
 

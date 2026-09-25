@@ -4,13 +4,14 @@ from datetime import date
 
 import pytest
 
-from conftest import read_fixture
 from meridian.providers.base import FilingDocument, FilingRef, ProviderResult
 from meridian.rag.embeddings import HashingEmbedder
 from meridian.rag.retriever import HybridRetriever
 from meridian.rag.store import InMemoryVectorStore
 from meridian.rag.types import ChunkMetadata, DocumentChunk, RetrievedChunk
 from meridian.schemas.research import CompanyIdentity
+
+from .conftest import read_fixture
 
 
 def _company() -> CompanyIdentity:

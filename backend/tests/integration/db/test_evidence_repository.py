@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import pytest
+
+from meridian.db.repositories.evidence import EvidenceRepository
+from meridian.db.repositories.research import ResearchRepository
 from tests.integration.db.helpers import (
     make_evidence,
     make_finding,
@@ -10,9 +13,6 @@ from tests.integration.db.helpers import (
     make_source,
     unique_session_id,
 )
-
-from meridian.db.repositories.evidence import EvidenceRepository
-from meridian.db.repositories.research import ResearchRepository
 
 pytestmark = pytest.mark.integration
 

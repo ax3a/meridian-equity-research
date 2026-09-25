@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from conftest import read_fixture
 from meridian.rag.parsing import parse_filing_html
 from meridian.rag.sections import split_sections
+
+from .conftest import read_fixture
 
 
 def test_10k_section_keys_present() -> None:

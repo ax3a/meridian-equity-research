@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from tests.unit.financial_engine.conftest import REVENUE_FY2023, REVENUE_FY2024
 
 from meridian.financial_engine.growth import cagr, yoy_growth
+from tests.unit.financial_engine.conftest import REVENUE_FY2023, REVENUE_FY2024
 
 
 class TestYoyGrowth:

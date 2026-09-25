@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import pytest
-from tests.integration.db.helpers import make_request, unique_session_id
 
 from meridian.db.repositories.events import EventRepository
 from meridian.db.repositories.research import ResearchRepository
 from meridian.schemas.events import EventType, ProgressEvent
+from tests.integration.db.helpers import make_request, unique_session_id
 
 pytestmark = pytest.mark.integration
 

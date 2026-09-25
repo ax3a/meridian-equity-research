@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from conftest import read_fixture
 from meridian.rag.parsing import parse_filing_html
+
+from .conftest import read_fixture
 
 
 def test_strips_script_style_and_title_extracted() -> None:
