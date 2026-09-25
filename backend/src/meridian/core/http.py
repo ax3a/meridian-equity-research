@@ -230,7 +230,11 @@ class HttpClient:
                     resp.raise_for_status()
                     if len(resp.content) > MAX_BODY_BYTES:
                         raise ProviderError(host, "response too large", retryable=False)
-                    return resp.json() if content_type == "json" else resp.text
+                    if content_type == "json":
+                        return resp.json()
+                    # EDGAR serves filings with no declared charset, and the fallback turns UTF-8
+                    # bullets and quotes into mojibake ("â¢") that gets quoted verbatim in the report.
+                    return resp.content.decode(resp.charset_encoding or "utf-8", errors="replace")
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
             raise ProviderError(host, f"HTTP {code} for {url[:160]}", retryable=_retryable(exc), status=code) from exc

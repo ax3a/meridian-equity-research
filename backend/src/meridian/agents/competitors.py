@@ -54,6 +54,21 @@ def _peer_medians(peers: list) -> dict[str, float | None]:
     return out
 
 
+# A peer snapshot carries an evidence id for every line item it fetched. Attaching all of them to one
+# sentence produced claims trailing twenty markers, which drowns the text and helps nobody verify
+# anything. Cite a few representative ids; the Sources tab lists the rest.
+_MAX_CITATIONS_PER_CLAIM = 3
+
+
+def _cite(*groups: list[str], limit: int = _MAX_CITATIONS_PER_CLAIM) -> list[str]:
+    seen: list[str] = []
+    for group in groups:
+        for eid in group:
+            if eid and eid not in seen:
+                seen.append(eid)
+    return seen[:limit]
+
+
 def _offline_findings(agent: CompetitorsAgent, target, peers: list) -> list[Finding]:
     findings: list[Finding] = []
     if not peers:
@@ -67,7 +82,7 @@ def _offline_findings(agent: CompetitorsAgent, target, peers: list) -> list[Find
                     f"{peer.fiscal_period or 'its most recent period'}.",
                     FindingKind.FACT,
                     ReportSection.INDUSTRY_COMPETITION,
-                    evidence_ids=list(peer.evidence_ids),
+                    evidence_ids=_cite(list(peer.evidence_ids)),
                     confidence=Confidence.MEDIUM,
                 )
             )
@@ -81,7 +96,7 @@ def _offline_findings(agent: CompetitorsAgent, target, peers: list) -> list[Find
         target_value = getattr(target, field_name)
         if median is None or target_value is None:
             continue
-        evidence_ids = [e for p in peers for e in p.evidence_ids][:8] + list(target.evidence_ids)
+        evidence_ids = _cite(list(target.evidence_ids), [e for p in peers for e in p.evidence_ids], limit=4)
         findings.append(
             agent.finding(
                 f"{target.company.ticker}'s {label} of {target_value:.1%} compares to a peer median of {median:.1%} "

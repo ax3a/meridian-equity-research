@@ -1,17 +1,25 @@
 import type { NextConfig } from "next";
 
 /**
- * Content-Security-Policy: no `unsafe-eval`; `unsafe-inline` is permitted only for styles because
- * Tailwind's base layer and a handful of components use inline `style` attributes for chart colours.
- * Scripts are restricted to `self` (Next.js's own hashed bundles) with no inline execution allowed.
+ * Content-Security-Policy: in production, no `unsafe-eval` and no inline scripts — scripts are
+ * restricted to `self` (Next.js's own hashed bundles). `unsafe-inline` is permitted only for styles,
+ * because Tailwind's base layer and some chart colours use inline `style` attributes.
+ *
+ * Development needs `unsafe-eval` and `unsafe-inline` for scripts: `next dev` injects inline bootstrap
+ * scripts and React Fast Refresh evaluates code as strings. Without this relaxation the dev server
+ * renders an empty shell whose data never loads, while the production build works fine — so the
+ * exception is scoped to NODE_ENV !== "production" and never ships.
  */
+const isDev = process.env.NODE_ENV !== "production";
+
 const CSP = [
   "default-src 'self'",
-  "script-src 'self'",
+  isDev ? "script-src 'self' 'unsafe-eval' 'unsafe-inline'" : "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  // Dev also opens a websocket back to the dev server for hot reload.
+  isDev ? "connect-src 'self' ws: wss:" : "connect-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

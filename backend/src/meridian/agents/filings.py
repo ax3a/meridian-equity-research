@@ -64,15 +64,22 @@ class FilingsAgent(BaseAgent):
         await self.tool(ctx, "list_filings", ticker=ticker, forms=["10-K", "10-Q", "8-K"], limit=12)
         await self.tool(ctx, "index_filings", ticker=ticker, forms=["10-K", "10-Q"], limit=3)
 
+        # Scoped per section: one passage may legitimately answer queries feeding different sections,
+        # but quoting it twice under one section says nothing new.
+        seen_by_section: dict[ReportSection, set[str]] = {}
         for query, section, label in _QUERIES:
+            seen_evidence = seen_by_section.setdefault(section, set())
             inv = await self.tool(ctx, "search_filings", ticker=ticker, query=query, k=2)
             if not inv.ok or inv.output is None or not inv.output.passages:
                 continue
             queries_hit += 1
             for hit in list(inv.output.passages)[:2]:
                 text = _clip(getattr(hit, "text", ""))
-                if not text:
+                evidence_id = getattr(hit, "evidence_id", "")
+                # Queries overlap; quoting one passage under several headings pads the report.
+                if not text or evidence_id in seen_evidence:
                     continue
+                seen_evidence.add(evidence_id)
                 # Prefix with the topic so the same passage surfaced for two different queries never
                 # collides as a "duplicate claim" during citation validation (which dedups on claim text).
                 findings.append(
@@ -80,7 +87,7 @@ class FilingsAgent(BaseAgent):
                         describe_claim(label, text),
                         FindingKind.FACT,
                         section,
-                        evidence_ids=[getattr(hit, "evidence_id", "")],
+                        evidence_ids=[evidence_id],
                         confidence=Confidence.MEDIUM,
                     )
                 )
@@ -91,7 +98,7 @@ class FilingsAgent(BaseAgent):
                 items = ", ".join(getattr(event, "items", []) or [])
                 description = getattr(event, "description", "") or "Material event disclosed."
                 filed = getattr(event, "filed", None) or getattr(event, "filing_date", None)
-                claim = f"Filed 8-K (item(s) {items or 'n/a'}) on {filed}: {_clip(description, 400)}"
+                claim = describe_claim(f"Filed 8-K (item(s) {items or 'n/a'}) on {filed}", description)
                 evidence_id = getattr(event, "evidence_id", "")
                 if not evidence_id:
                     continue

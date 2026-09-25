@@ -30,13 +30,29 @@ def clean_passage(text: str) -> str:
     return _LEADING_HEADING_RE.sub("", cleaned).strip()
 
 
+def _drop_leading_fragment(text: str) -> str:
+    """Skip a partial opening sentence.
+
+    Retrieved chunks are cut at a token boundary, so they often begin mid-thought ("successful, and we
+    may fail to sell..."). Starting a claim there reads as broken. If the text does not begin like a
+    sentence and a later sentence boundary leaves enough material, start from that instead.
+    """
+    if not text or text[0].isupper() or text[0].isdigit() or text[0] in "\"'(":
+        return text
+    match = _SENTENCE_END_RE.search(text)
+    if match is None:
+        return text
+    remainder = text[match.end():].strip()
+    return remainder if len(remainder) >= 80 else text
+
+
 def summarize_passage(text: str, *, max_chars: int = DEFAULT_MAX_CHARS) -> str:
     """Return whole sentences from `text`, never exceeding `max_chars` and never cut mid-word.
 
     Prefers complete sentences; falls back to a word boundary with an ellipsis when the first sentence is
     itself longer than the budget.
     """
-    cleaned = clean_passage(text)
+    cleaned = _drop_leading_fragment(clean_passage(text))
     if not cleaned:
         return ""
     if len(cleaned) <= max_chars:

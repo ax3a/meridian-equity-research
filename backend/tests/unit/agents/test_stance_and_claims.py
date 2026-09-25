@@ -120,6 +120,30 @@ def test_describe_claim_does_not_double_the_label():
     assert describe_claim("Bull case", "Revenue grew 17.8%.") == "Bull case: Revenue grew 17.8%."
 
 
+def test_a_passage_starting_mid_sentence_drops_the_broken_opening():
+    """Chunks are cut at token boundaries, so they often start mid-thought.
+
+    Quoting from there produced report sentences like "successful, and we may fail to sell any
+    meaningful standalone software or services."
+    """
+    passage = (
+        "successful, and we may fail to sell any meaningful standalone software. "
+        "We design and manufacture accelerated computing platforms for data centres worldwide, "
+        "serving hyperscale customers across several regions."
+    )
+
+    result = summarize_passage(passage, max_chars=200)
+
+    assert result.startswith("We design and manufacture")
+
+
+def test_a_mid_sentence_start_is_kept_when_nothing_substantial_follows():
+    # Dropping the fragment would leave almost nothing, so the original text is better than a stub.
+    passage = "attributable to the Compute & Networking segment. Yes."
+
+    assert summarize_passage(passage).startswith("attributable to")
+
+
 def test_summarize_passage_falls_back_to_a_word_boundary_for_one_long_sentence():
     long_sentence = "The company " + "expands into new markets and " * 20 + "continues to invest"
 

@@ -15,10 +15,12 @@ from meridian.schemas.research import ResearchTask
 from meridian.schemas.state import ResearchState
 from meridian.tools.base import ToolContext
 
-_BUSINESS_QUERIES: tuple[str, ...] = (
-    "business overview, products and services",
-    "revenue sources and geographic markets",
-    "customers and competitive position",
+# (retrieval query, short label). The query is phrased for retrieval quality; the label is what a reader
+# sees in front of the quoted passage, so it has to read like a report heading rather than a search box.
+_BUSINESS_QUERIES: tuple[tuple[str, str], ...] = (
+    ("business overview, products and services", "Products and services"),
+    ("revenue sources and geographic markets", "Revenue and markets"),
+    ("customers and competitive position", "Customers and competition"),
 )
 
 
@@ -97,23 +99,26 @@ class CompanyAgent(BaseAgent):
             summary_bits.append(f"Company profile unavailable: {profile_inv.error}")
 
         topics_covered = 0
-        for query in _BUSINESS_QUERIES:
+        seen_evidence: set[str] = set()
+        for query, label in _BUSINESS_QUERIES:
             passages_inv = await self.tool(ctx, "search_filings", ticker=ticker, query=query, k=2)
             if not passages_inv.ok or passages_inv.output is None or not passages_inv.output.passages:
                 continue
             topics_covered += 1
             for hit in list(passages_inv.output.passages)[:2]:
                 text = _clip(getattr(hit, "text", ""))
-                if not text:
+                evidence_id = getattr(hit, "evidence_id", "")
+                # Retrieval queries overlap, so the same passage can answer several topics. Quoting it
+                # once per topic pads the report with duplicates that say nothing new.
+                if not text or evidence_id in seen_evidence:
                     continue
-                # Prefix with the topic so the same passage surfaced for two different queries never
-                # collides as a "duplicate claim" during citation validation (which dedups on claim text).
+                seen_evidence.add(evidence_id)
                 findings.append(
                     self.finding(
-                        describe_claim(query, text),
+                        describe_claim(label, text),
                         FindingKind.FACT,
                         ReportSection.BUSINESS_MODEL,
-                        evidence_ids=[getattr(hit, "evidence_id", "")],
+                        evidence_ids=[evidence_id],
                         confidence=Confidence.MEDIUM,
                     )
                 )
