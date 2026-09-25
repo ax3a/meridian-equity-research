@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: theme("colors.ink.950");
+  color: theme("colors.ink.100");
+}
+
+::selection {
+  background-color: theme("colors.accent.600");
+  color: white;
+}
+
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-break-before {
+    break-before: page;
+  }
+}
