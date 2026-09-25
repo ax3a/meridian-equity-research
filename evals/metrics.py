@@ -42,7 +42,12 @@ class Metric:
     counts: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "value": self.value, "detail": self.detail, "counts": self.counts}
+        return {
+            "name": self.name,
+            "value": self.value,
+            "detail": self.detail,
+            "counts": self.counts,
+        }
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -61,7 +66,9 @@ def task_completion(state: ResearchState) -> Metric:
     )
 
 
-def routing_accuracy(state: ResearchState, *, expected: set[AgentName], forbidden: set[AgentName]) -> Metric:
+def routing_accuracy(
+    state: ResearchState, *, expected: set[AgentName], forbidden: set[AgentName]
+) -> Metric:
     """Did the supervisor select the agents this request needs, and skip the ones it should not run?"""
     planned = {t.agent for t in (state.plan.tasks if state.plan else [])}
     missing = sorted(a.value for a in expected - planned)
@@ -72,18 +79,27 @@ def routing_accuracy(state: ResearchState, *, expected: set[AgentName], forbidde
         "routing_accuracy",
         _ratio(correct, checks),
         f"missing={missing or 'none'}; wrongly included={wrongly_included or 'none'}",
-        {"planned": sorted(a.value for a in planned), "missing": missing, "wrongly_included": wrongly_included},
+        {
+            "planned": sorted(a.value for a in planned),
+            "missing": missing,
+            "wrongly_included": wrongly_included,
+        },
     )
 
 
 def citation_coverage(state: ResearchState) -> Metric:
     """Share of factual/calculated findings that carry support which actually resolves."""
-    checkable = [f for f in state.findings() if f.kind in (FindingKind.FACT, FindingKind.CALCULATED)]
+    checkable = [
+        f
+        for f in state.findings()
+        if f.kind in (FindingKind.FACT, FindingKind.CALCULATED)
+    ]
     known_metrics = set(state.metrics.values) if state.metrics else set()
     supported = [
         f
         for f in checkable
-        if any(e in state.evidence for e in f.evidence_ids) or any(m in known_metrics for m in f.metric_refs)
+        if any(e in state.evidence for e in f.evidence_ids)
+        or any(m in known_metrics for m in f.metric_refs)
     ]
     return Metric(
         "citation_coverage",
@@ -111,18 +127,27 @@ def source_correctness(state: ResearchState) -> Metric:
         _ratio(valid, len(cited)),
         f"{valid}/{len(cited)} citations resolve to a real source "
         f"({dangling_evidence} unknown evidence, {dangling_source} orphaned source)",
-        {"valid": valid, "cited": len(cited), "unknown_evidence": dangling_evidence, "orphan_source": dangling_source},
+        {
+            "valid": valid,
+            "cited": len(cited),
+            "unknown_evidence": dangling_evidence,
+            "orphan_source": dangling_source,
+        },
     )
 
 
 def calculation_accuracy(state: ResearchState) -> Metric:
     """Recompute the metrics table from the statements and compare, catching drift between the two."""
     if state.financials is None or state.metrics is None:
-        return Metric("calculation_accuracy", None, "no statements or metrics on the run", {})
+        return Metric(
+            "calculation_accuracy", None, "no statements or metrics on the run", {}
+        )
     recomputed = compute_metrics(
         state.financials,
         state.quote,
-        is_financial_institution=bool(state.company and state.company.is_financial_institution),
+        is_financial_institution=bool(
+            state.company and state.company.is_financial_institution
+        ),
     )
     compared, matched, mismatches = 0, 0, []
     for ref, original in state.metrics.values.items():
@@ -134,11 +159,14 @@ def calculation_accuracy(state: ResearchState) -> Metric:
         if abs(original.value - check.value) / denominator <= CALC_TOLERANCE:
             matched += 1
         elif len(mismatches) < 5:
-            mismatches.append(f"{ref}: run={original.value!r} recomputed={check.value!r}")
+            mismatches.append(
+                f"{ref}: run={original.value!r} recomputed={check.value!r}"
+            )
     return Metric(
         "calculation_accuracy",
         _ratio(matched, compared),
-        f"{matched}/{compared} metrics reproduce exactly" + (f"; e.g. {mismatches[0]}" if mismatches else ""),
+        f"{matched}/{compared} metrics reproduce exactly"
+        + (f"; e.g. {mismatches[0]}" if mismatches else ""),
         {"matched": matched, "compared": compared, "mismatches": mismatches},
     )
 
@@ -150,13 +178,20 @@ def critic_rejection_rate(state: ResearchState) -> Metric:
     rejected = sum(1 for f in findings if f.status == FindingStatus.REJECTED)
     unverified = sum(1 for f in findings if f.status == FindingStatus.UNVERIFIED)
     approved = sum(1 for f in findings if f.status == FindingStatus.APPROVED)
-    issues = sum(len(r.issues) for review in state.critic_reviews for r in review.reviews)
+    issues = sum(
+        len(r.issues) for review in state.critic_reviews for r in review.reviews
+    )
     return Metric(
         "critic_rejection_rate",
         _ratio(rejected + unverified, len(findings)),
         f"{approved} approved, {unverified} unverified, {rejected} rejected; "
         f"{issues} issues raised over {len(state.critic_reviews)} round(s)",
-        {"approved": approved, "unverified": unverified, "rejected": rejected, "issues": issues},
+        {
+            "approved": approved,
+            "unverified": unverified,
+            "rejected": rejected,
+            "issues": issues,
+        },
     )
 
 
@@ -165,21 +200,30 @@ def unsupported_claims_in_report(state: ResearchState) -> Metric:
     if state.report is None:
         return Metric("unsupported_report_claims", None, "no report produced", {})
     paragraphs = [p for section in state.report.sections for p in section.paragraphs]
-    factual = [p for p in paragraphs if p.kind in (FindingKind.FACT, FindingKind.CALCULATED)]
+    factual = [
+        p for p in paragraphs if p.kind in (FindingKind.FACT, FindingKind.CALCULATED)
+    ]
     unsupported = [
         p
         for p in factual
-        if not any(e in state.report.citations for e in p.evidence_ids) and not p.metric_refs
+        if not any(e in state.report.citations for e in p.evidence_ids)
+        and not p.metric_refs
     ]
     return Metric(
         "unsupported_report_claims",
         float(len(unsupported)),
         f"{len(unsupported)}/{len(factual)} factual paragraphs lack a resolvable citation or metric ref",
-        {"unsupported": len(unsupported), "factual": len(factual), "paragraphs": len(paragraphs)},
+        {
+            "unsupported": len(unsupported),
+            "factual": len(factual),
+            "paragraphs": len(paragraphs),
+        },
     )
 
 
-def report_completeness(state: ResearchState, *, required: tuple[ReportSection, ...] | None = None) -> Metric:
+def report_completeness(
+    state: ResearchState, *, required: tuple[ReportSection, ...] | None = None
+) -> Metric:
     """Sections expected for the depth that was requested.
 
     A quick-depth run deliberately drops the bull and bear cases, so scoring it against the standard
@@ -187,7 +231,12 @@ def report_completeness(state: ResearchState, *, required: tuple[ReportSection, 
     """
     expected = required if required is not None else REQUIRED_SECTIONS
     if state.report is None:
-        return Metric("report_completeness", 0.0, "no report produced", {"present": [], "missing": []})
+        return Metric(
+            "report_completeness",
+            0.0,
+            "no report produced",
+            {"present": [], "missing": []},
+        )
     present = {s.section for s in state.report.sections if s.paragraphs}
     missing = sorted(s.value for s in expected if s not in present)
     return Metric(
@@ -206,7 +255,11 @@ def cost_and_tokens(state: ResearchState) -> Metric:
         round(cost, 4),
         f"{tokens} tokens across {len(state.usage)} LLM call(s); "
         f"{len(state.tool_calls)} tool calls (0 tokens means offline mode)",
-        {"tokens": tokens, "llm_calls": len(state.usage), "tool_calls": len(state.tool_calls)},
+        {
+            "tokens": tokens,
+            "llm_calls": len(state.usage),
+            "tool_calls": len(state.tool_calls),
+        },
     )
 
 
@@ -239,5 +292,10 @@ def score_run(
         report_completeness(state, required=required_sections),
         tool_success_rate(state),
         cost_and_tokens(state),
-        Metric("latency_seconds", round(latency_s, 1), "wall-clock time for the whole run", {}),
+        Metric(
+            "latency_seconds",
+            round(latency_s, 1),
+            "wall-clock time for the whole run",
+            {},
+        ),
     ]

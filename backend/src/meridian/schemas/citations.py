@@ -27,10 +27,18 @@ class Source(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
-    def make(cls, *, kind: SourceKind, title: str, provider: str, publisher: str,
-             url: str | None = None, **kw: Any) -> Source:
-        return cls(id=stable_id("src", provider, kind, url or title), kind=kind, title=title,
-                   provider=provider, publisher=publisher, url=url, **kw)
+    def make(
+        cls, *, kind: SourceKind, title: str, provider: str, publisher: str, url: str | None = None, **kw: Any
+    ) -> Source:
+        return cls(
+            id=stable_id("src", provider, kind, url or title),
+            kind=kind,
+            title=title,
+            provider=provider,
+            publisher=publisher,
+            url=url,
+            **kw,
+        )
 
 
 class EvidenceLocator(BaseModel):
@@ -64,12 +72,23 @@ class Evidence(BaseModel):
     injection_flags: list[str] = Field(default_factory=list)
 
     @classmethod
-    def make(cls, *, source_id: str, text: str, locator: EvidenceLocator | None = None,
-             injection_flags: list[str] | None = None) -> Evidence:
+    def make(
+        cls,
+        *,
+        source_id: str,
+        text: str,
+        locator: EvidenceLocator | None = None,
+        injection_flags: list[str] | None = None,
+    ) -> Evidence:
         loc = locator or EvidenceLocator()
         clipped = text[:MAX_EVIDENCE_CHARS]
-        return cls(id=stable_id("ev", source_id, loc.model_dump_json(), clipped), source_id=source_id,
-                   locator=loc, text=clipped, injection_flags=injection_flags or [])
+        return cls(
+            id=stable_id("ev", source_id, loc.model_dump_json(), clipped),
+            source_id=source_id,
+            locator=loc,
+            text=clipped,
+            injection_flags=injection_flags or [],
+        )
 
 
 class Citation(BaseModel):

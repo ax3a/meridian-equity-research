@@ -80,7 +80,12 @@ async def run_case(case: EvalCase, settings: Settings) -> dict[str, Any]:
 
     try:
         session_id = await runner.start(
-            ResearchRequest(query=case.query, ticker=case.ticker, depth=case.depth, require_approval=False)
+            ResearchRequest(
+                query=case.query,
+                ticker=case.ticker,
+                depth=case.depth,
+                require_approval=False,
+            )
         )
         await runner.wait_idle(session_id)
         state = await runner.status(session_id)
@@ -92,14 +97,18 @@ async def run_case(case: EvalCase, settings: Settings) -> dict[str, Any]:
                 "error": exc.message,
                 "latency_seconds": round(elapsed, 1),
                 "passed": case.expect_failure,
-                "notes": "failed as expected" if case.expect_failure else "unexpected failure",
+                "notes": "failed as expected"
+                if case.expect_failure
+                else "unexpected failure",
             }
         )
         return record
 
     elapsed = time.perf_counter() - started
     if state is None:
-        record.update({"status": "missing", "passed": False, "notes": "runner returned no state"})
+        record.update(
+            {"status": "missing", "passed": False, "notes": "runner returned no state"}
+        )
         return record
 
     failed_cleanly = state.status == RunStatus.FAILED
@@ -110,7 +119,9 @@ async def run_case(case: EvalCase, settings: Settings) -> dict[str, Any]:
                 "passed": failed_cleanly,
                 "latency_seconds": round(elapsed, 1),
                 "error": state.errors[0].message if state.errors else None,
-                "notes": "failed cleanly" if failed_cleanly else "expected a clean failure, got a run",
+                "notes": "failed cleanly"
+                if failed_cleanly
+                else "expected a clean failure, got a run",
             }
         )
         return record
@@ -130,7 +141,8 @@ async def run_case(case: EvalCase, settings: Settings) -> dict[str, Any]:
             "status": state.status.value,
             "resolved_ticker": resolved,
             "expected_ticker": case.expected_ticker,
-            "ticker_correct": case.expected_ticker is None or resolved == case.expected_ticker,
+            "ticker_correct": case.expected_ticker is None
+            or resolved == case.expected_ticker,
             "metrics": [metric.as_dict() for metric in scored],
             "absent_metrics_ok": absent_ok,
             "absent_metrics_detail": absent_detail,
@@ -176,8 +188,10 @@ def render_markdown(results: list[dict[str, Any]], settings: Settings) -> str:
     lines = [
         "# Meridian evaluation scorecard",
         "",
-        (f"Generated {datetime.now(UTC).isoformat(timespec='seconds')} · "
-        f"LLM mode: **{settings.llm_mode}** · data mode: **{settings.data_mode}**"),
+        (
+            f"Generated {datetime.now(UTC).isoformat(timespec='seconds')} · "
+            f"LLM mode: **{settings.llm_mode}** · data mode: **{settings.data_mode}**"
+        ),
         "",
         "Offline LLM mode means narrative text is template-based; figures and citations are real either way.",
         "",
@@ -198,10 +212,19 @@ def render_markdown(results: list[dict[str, Any]], settings: Settings) -> str:
     for r in results:
         if not r.get("metrics"):
             continue
-        lines += [f"### {r['case']}", "", "| Metric | Value | Detail |", "| --- | --- | --- |"]
+        lines += [
+            f"### {r['case']}",
+            "",
+            "| Metric | Value | Detail |",
+            "| --- | --- | --- |",
+        ]
         for metric in r["metrics"]:
             value = metric["value"]
-            shown = "n/a" if value is None else (f"{value:.3f}" if isinstance(value, float) else str(value))
+            shown = (
+                "n/a"
+                if value is None
+                else (f"{value:.3f}" if isinstance(value, float) else str(value))
+            )
             lines.append(f"| {metric['name']} | {shown} | {metric['detail']} |")
         lines.append("")
 
@@ -212,13 +235,17 @@ def render_markdown(results: list[dict[str, Any]], settings: Settings) -> str:
             "",
             f"Result: **{'passed' if injection['passed'] else 'FAILED'}**",
             "",
-            (f"- chunks flagged: {injection['flagged_chunks']}/{injection['total_chunks']} "
-            f"(patterns: {', '.join(injection['flags_seen']) or 'none'})"),
+            (
+                f"- chunks flagged: {injection['flagged_chunks']}/{injection['total_chunks']} "
+                f"(patterns: {', '.join(injection['flags_seen']) or 'none'})"
+            ),
             f"- hostile text confined to an untrusted-evidence block: {injection['evidence_contained']}",
             f"- forged block delimiters neutralised: {injection['delimiters_neutralised']}",
             f"- instruction leaked into the system prompt: {injection['instruction_outside_evidence']}",
-            (f"- planted figure rejected by the critic: {injection['planted_figure_rejected']} "
-            f"(issues: {', '.join(injection['critic_issue_types']) or 'none'})"),
+            (
+                f"- planted figure rejected by the critic: {injection['planted_figure_rejected']} "
+                f"(issues: {', '.join(injection['critic_issue_types']) or 'none'})"
+            ),
             "",
         ]
     return "\n".join(lines)
@@ -227,19 +254,28 @@ def render_markdown(results: list[dict[str, Any]], settings: Settings) -> str:
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Meridian evaluation suite.")
     parser.add_argument("--cases", help="comma-separated case keys (default: all)")
-    parser.add_argument("--snapshot", action="store_true", help="use recorded data only (no network)")
+    parser.add_argument(
+        "--snapshot", action="store_true", help="use recorded data only (no network)"
+    )
     parser.add_argument("--skip-injection", action="store_true")
     parser.add_argument("--json", dest="json_path", help="also write the raw JSON here")
     args = parser.parse_args()
 
     settings = _settings(args.snapshot)
-    selected = [BY_KEY[k.strip()] for k in args.cases.split(",")] if args.cases else list(CASES)
+    selected = (
+        [BY_KEY[k.strip()] for k in args.cases.split(",")]
+        if args.cases
+        else list(CASES)
+    )
 
     results: list[dict[str, Any]] = []
     for case in selected:
         print(f"[eval] {case.key}: {case.query}", flush=True)
         result = await run_case(case, settings)
-        print(f"       -> {result.get('status')} passed={result.get('passed')}", flush=True)
+        print(
+            f"       -> {result.get('status')} passed={result.get('passed')}",
+            flush=True,
+        )
         results.append(result)
 
     if not args.skip_injection:
@@ -256,7 +292,9 @@ async def main() -> int:
         "data_mode": settings.data_mode,
         "results": results,
     }
-    (RESULTS_DIR / f"{stamp}.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (RESULTS_DIR / f"{stamp}.json").write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
     scorecard = render_markdown(results, settings)
     (RESULTS_DIR / "latest.md").write_text(scorecard, encoding="utf-8")
     if args.json_path:
@@ -264,7 +302,10 @@ async def main() -> int:
 
     print("\n" + scorecard)
     failed = [r["case"] for r in results if not r.get("passed")]
-    print(f"\n{len(results) - len(failed)}/{len(results)} cases passed" + (f"; failed: {failed}" if failed else ""))
+    print(
+        f"\n{len(results) - len(failed)}/{len(results)} cases passed"
+        + (f"; failed: {failed}" if failed else "")
+    )
     return 0
 
 

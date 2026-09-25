@@ -88,9 +88,7 @@ class ResearchState(BaseModel):
 
     def findings(self, agents: list[AgentName] | None = None) -> list[Finding]:
         wanted = {a.value for a in agents} if agents else None
-        return [
-            f for key, out in self.outputs.items() if wanted is None or key in wanted for f in out.findings
-        ]
+        return [f for key, out in self.outputs.items() if wanted is None or key in wanted for f in out.findings]
 
     def approved_findings(self) -> list[Finding]:
         return [f for f in self.findings() if f.status in (FindingStatus.APPROVED, FindingStatus.UNVERIFIED)]

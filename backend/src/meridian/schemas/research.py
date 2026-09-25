@@ -74,8 +74,15 @@ class ResearchTask(BaseModel):
     def make(cls, agent: AgentName, objective: str, wave: int, *, revision: int = 0, **kw: Any) -> ResearchTask:
         instructions = kw.get("instructions") or {}
         fp = stable_id("fp", agent, " ".join(objective.lower().split()), sorted(instructions.items()), revision)
-        return cls(id=stable_id("task", fp), agent=agent, objective=objective, wave=wave,
-                   revision=revision, fingerprint=fp, **kw)
+        return cls(
+            id=stable_id("task", fp),
+            agent=agent,
+            objective=objective,
+            wave=wave,
+            revision=revision,
+            fingerprint=fp,
+            **kw,
+        )
 
 
 class ResearchPlan(BaseModel):

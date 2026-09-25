@@ -42,7 +42,7 @@ def _drop_leading_fragment(text: str) -> str:
     match = _SENTENCE_END_RE.search(text)
     if match is None:
         return text
-    remainder = text[match.end():].strip()
+    remainder = text[match.end() :].strip()
     return remainder if len(remainder) >= 80 else text
 
 

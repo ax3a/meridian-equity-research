@@ -39,7 +39,8 @@ CASES: tuple[EvalCase, ...] = (
         query="Analyse Microsoft",
         why="Baseline large cap with a June fiscal year end and a long filing history.",
         expected_ticker="MSFT",
-        expected_agents=CORE_AGENTS | {AgentName.VALUATION, AgentName.RISK, AgentName.BULL, AgentName.BEAR},
+        expected_agents=CORE_AGENTS
+        | {AgentName.VALUATION, AgentName.RISK, AgentName.BULL, AgentName.BEAR},
     ),
     EvalCase(
         key="nvda_focus",

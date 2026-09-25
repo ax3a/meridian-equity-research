@@ -186,5 +186,6 @@ class UserPreferences(BaseModel):
     preferred_sectors: list[str] = Field(default_factory=list, max_length=20)
     preferred_metrics: list[str] = Field(default_factory=list, max_length=30)
     valuation_methods: list[Literal["pe", "ev_ebitda", "ev_sales", "price_sales", "price_fcf", "dcf"]] = Field(
-        default_factory=lambda: ["pe", "ev_ebitda", "ev_sales", "price_fcf", "dcf"])
+        default_factory=lambda: ["pe", "ev_ebitda", "ev_sales", "price_fcf", "dcf"]
+    )
     require_approval: bool = True

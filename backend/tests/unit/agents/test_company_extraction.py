@@ -63,9 +63,10 @@ def test_an_acronym_in_the_focus_clause_does_not_beat_the_company_name():
     candidates = candidate_names("Analyse NVIDIA with attention to AI infrastructure growth and margins")
 
     assert candidates[0] == "NVIDIA"
-    assert _first_matching(
-        "Analyse NVIDIA with attention to AI infrastructure growth and margins", KNOWN | {"AI"}
-    ) == "NVIDIA"
+    assert (
+        _first_matching("Analyse NVIDIA with attention to AI infrastructure growth and margins", KNOWN | {"AI"})
+        == "NVIDIA"
+    )
 
 
 @pytest.mark.parametrize("vocabulary", ["AI", "ETF", "GDP", "CEO", "IPO", "ESG", "SAAS", "TTM"])
