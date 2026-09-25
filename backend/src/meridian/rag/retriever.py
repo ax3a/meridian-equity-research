@@ -13,7 +13,7 @@ from meridian.core.ids import stable_id
 from meridian.core.logging import get_logger
 from meridian.providers.base import EmbeddingProvider, FilingRef, FilingsProvider
 from meridian.rag.chunking import chunk_section
-from meridian.rag.parsing import page_for_offset, parse_filing_html
+from meridian.rag.parsing import ParsedDocument, page_for_offset, parse_filing_html
 from meridian.rag.sections import split_sections
 from meridian.rag.store import StoredDocument, VectorStore
 from meridian.rag.types import ChunkMetadata, DocumentChunk, IndexReport, RetrievedChunk
@@ -51,6 +51,46 @@ class HybridRetriever:
             self._document_locks[document_id] = lock
         return lock
 
+    def _build_chunks(
+        self,
+        html: str,
+        filing: FilingRef,
+        company: CompanyIdentity,
+        document_id: str,
+        is_snapshot: bool,
+    ) -> tuple[ParsedDocument, list[DocumentChunk]]:
+        """Parse one filing into indexable chunks. Pure CPU work, run on a worker thread."""
+        parsed = parse_filing_html(html)
+        chunks: list[DocumentChunk] = []
+        for section in split_sections(parsed.text, filing.form):
+            for draft in chunk_section(section):
+                metadata = ChunkMetadata(
+                    ticker=company.ticker,
+                    cik=company.cik,
+                    company=company.name,
+                    form=filing.form,
+                    filing_date=filing.filing_date,
+                    accession_number=filing.accession_number,
+                    section=section.title,
+                    section_key=section.key,
+                    source_url=filing.url,
+                    document_title=parsed.title or filing.description or f"{filing.form} {filing.filing_date}",
+                    page=page_for_offset(parsed.page_breaks, draft.start_offset),
+                    chunk_index=draft.index,
+                    is_snapshot=is_snapshot,
+                )
+                chunks.append(
+                    DocumentChunk(
+                        id=stable_id("chk", document_id, section.key, draft.index),
+                        document_id=document_id,
+                        text=draft.text,
+                        token_count=draft.token_count,
+                        metadata=metadata,
+                        injection_flags=injection.scan(draft.text),
+                    )
+                )
+        return parsed, chunks
+
     async def ensure_indexed(self, company: CompanyIdentity, filings: list[FilingRef]) -> IndexReport:
         report = IndexReport()
         for filing in filings:
@@ -65,42 +105,12 @@ class HybridRetriever:
                     result = await self.filings_provider.fetch_document(filing)
                     filing_doc = result.data
 
-                    parsed = parse_filing_html(filing_doc.html)
-                    sections = split_sections(parsed.text, filing.form)
-
-                    chunks: list[DocumentChunk] = []
-                    for section in sections:
-                        for draft in chunk_section(section):
-                            flags = injection.scan(draft.text)
-                            page = page_for_offset(parsed.page_breaks, draft.start_offset)
-                            metadata = ChunkMetadata(
-                                ticker=company.ticker,
-                                cik=company.cik,
-                                company=company.name,
-                                form=filing.form,
-                                filing_date=filing.filing_date,
-                                accession_number=filing.accession_number,
-                                section=section.title,
-                                section_key=section.key,
-                                source_url=filing.url,
-                                document_title=parsed.title
-                                or filing.description
-                                or f"{filing.form} {filing.filing_date}",
-                                page=page,
-                                chunk_index=draft.index,
-                                is_snapshot=result.is_snapshot,
-                            )
-                            chunk_id = stable_id("chk", document_id, section.key, draft.index)
-                            chunks.append(
-                                DocumentChunk(
-                                    id=chunk_id,
-                                    document_id=document_id,
-                                    text=draft.text,
-                                    token_count=draft.token_count,
-                                    metadata=metadata,
-                                    injection_flags=flags,
-                                )
-                            )
+                    # Parsing, sectioning, chunking and injection scanning are CPU-bound, and a 10-K is
+                    # megabytes of HTML. Run inline they block the event loop for seconds and starve
+                    # everything else in the process: SSE streams dropped and /health took 11 seconds.
+                    parsed, chunks = await asyncio.to_thread(
+                        self._build_chunks, filing_doc.html, filing, company, document_id, result.is_snapshot
+                    )
 
                     if not chunks:
                         report.failures.append(f"{filing.accession_number}: no chunks extracted from document")

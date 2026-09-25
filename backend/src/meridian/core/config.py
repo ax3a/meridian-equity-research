@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # NoDecode: pydantic-settings JSON-decodes complex types in the env source before validators run, so a
     # plain "http://a,http://b" in .env would raise before _split_origins could parse it.
     cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:3000"])
-    rate_limit_per_minute: int = 30
+    rate_limit_per_minute: int = 240
 
     database_url: str = "postgresql+asyncpg://meridian:meridian@localhost:5432/meridian"
     redis_url: str | None = "redis://localhost:6379/0"
@@ -75,10 +75,26 @@ class Settings(BaseSettings):
     langsmith_api_key: SecretStr | None = None
     langsmith_project: str = "meridian"
 
-    @field_validator("api_key", mode="before")
+    @field_validator(
+        "api_key",
+        "anthropic_api_key",
+        "langsmith_api_key",
+        "fmp_api_key",
+        "alpha_vantage_api_key",
+        "finnhub_api_key",
+        "polygon_api_key",
+        "fred_api_key",
+        "otel_exporter_otlp_endpoint",
+        mode="before",
+    )
     @classmethod
-    def _blank_api_key_means_open(cls, v: object) -> object:
-        """A blank or whitespace-only API_KEY means "no auth", not "the key is whitespace"."""
+    def _blank_secret_means_unset(cls, v: object) -> object:
+        """A blank value in .env means "not configured", not "configured with an empty string".
+
+        `.env.example` ships every optional key as `KEY=`, which parses to an empty secret rather than
+        None. Anything checking `is not None` then treats it as configured: LangSmith tracing switched
+        itself on with no credentials and hammered its API with 401s, shipping run traces off-box.
+        """
         if isinstance(v, str) and not v.strip():
             return None
         return v

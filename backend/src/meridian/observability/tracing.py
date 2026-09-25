@@ -28,7 +28,8 @@ def configure_tracing(settings: Settings) -> None:
     global _tracer
     _tracer = None
 
-    if settings.langsmith_api_key is not None:
+    # Truthiness, not `is not None`: a blank key must never enable tracing (see the Settings validator).
+    if settings.langsmith_api_key and settings.langsmith_api_key.get_secret_value().strip():
         os.environ["LANGSMITH_TRACING"] = "true"
         os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key.get_secret_value()
         os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project

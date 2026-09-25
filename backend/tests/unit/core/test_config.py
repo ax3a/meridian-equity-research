@@ -66,3 +66,46 @@ def test_every_llm_tier_resolves_a_model_and_effort(tier):
 
     assert settings.model_for(tier)
     assert settings.effort_for(tier) in ("low", "medium", "high", "xhigh", "max")
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "API_KEY",
+        "ANTHROPIC_API_KEY",
+        "LANGSMITH_API_KEY",
+        "FMP_API_KEY",
+        "ALPHA_VANTAGE_API_KEY",
+        "FINNHUB_API_KEY",
+        "POLYGON_API_KEY",
+        "FRED_API_KEY",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+    ],
+)
+def test_blank_optional_keys_are_unset_not_empty(tmp_path, key):
+    """`.env.example` ships every optional key blank. Blank must mean "not configured".
+
+    Regression: a blank LANGSMITH_API_KEY parsed as an empty secret rather than None, so tracing
+    enabled itself and repeatedly POSTed run traces to LangSmith, failing with 401 every time.
+    """
+    settings = _settings_from_env(tmp_path, f"{key}=\n")
+
+    assert getattr(settings, key.lower()) is None
+
+
+def test_whitespace_only_key_is_also_unset(tmp_path):
+    assert _settings_from_env(tmp_path, "ANTHROPIC_API_KEY=   \n").anthropic_api_key is None
+
+
+def test_a_real_key_is_kept(tmp_path):
+    settings = _settings_from_env(tmp_path, "ANTHROPIC_API_KEY=sk-ant-example\n")
+
+    assert settings.anthropic_api_key is not None
+    assert settings.anthropic_api_key.get_secret_value() == "sk-ant-example"
+
+
+def test_a_configured_key_selects_the_anthropic_path():
+    """The test session forces LLM_PROVIDER=offline and an env var outranks the .env file, so pass
+    `auto` directly: what is under test is that a present key is what flips `auto` to Anthropic."""
+    assert Settings(llm_provider="auto", anthropic_api_key="sk-ant-example").llm_mode == "anthropic"
+    assert Settings(llm_provider="auto", anthropic_api_key="").llm_mode == "offline"

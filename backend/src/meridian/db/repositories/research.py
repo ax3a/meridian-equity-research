@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -141,7 +142,10 @@ class ResearchRepository:
         row = await self._session.get(ResearchSessionModel, session_id)
         if row is None:
             return
-        row.state = state.model_dump(mode="json")
+        # A finished run holds thousands of evidence records, so this dump is megabytes of JSON and
+        # takes seconds. Done inline it blocks the event loop and stalls every other request, including
+        # the progress stream the UI depends on.
+        row.state = await asyncio.to_thread(state.model_dump, mode="json")
         row.status = state.status.value
         row.approval = state.approval
         if state.company is not None:

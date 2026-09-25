@@ -1,9 +1,16 @@
-import type { ResearchPlan } from "@/lib/types";
+import type { AgentProgress, ResearchPlan } from "@/lib/types";
 import { humanizeEnum } from "@/lib/format";
 import { StatusChip } from "@/components/ui/StatusChip";
 
-/** The supervisor's plan: objectives, rationale, tasks grouped by wave, and any skipped agents. */
-export function PlanView({ plan }: { plan: ResearchPlan }) {
+/**
+ * The supervisor's plan: objectives, rationale, tasks grouped by wave, and any skipped agents.
+ *
+ * Status comes from `live` (the run's current agent statuses), never from `plan.tasks[].status`: the
+ * plan is the snapshot taken when it was created, so its task statuses stay "pending" for the whole
+ * run. Reading them made every wave-1 agent look unstarted while the run was already in wave 2.
+ */
+export function PlanView({ plan, live = [] }: { plan: ResearchPlan; live?: AgentProgress[] }) {
+  const statusByAgent = new Map(live.map((a) => [a.agent, a.status]));
   const waves = [...new Set(plan.tasks.map((t) => t.wave))].sort((a, b) => a - b);
   const skipped = Object.entries(plan.skipped_agents);
 
@@ -43,7 +50,7 @@ export function PlanView({ plan }: { plan: ResearchPlan }) {
                       <span className="font-medium text-ink-100">{humanizeEnum(task.agent)}</span>
                       <p className="text-ink-300">{task.objective}</p>
                     </div>
-                    <StatusChip status={task.status} kind="task" />
+                    <StatusChip status={statusByAgent.get(task.agent) ?? task.status} kind="task" />
                   </li>
                 ))}
             </ul>

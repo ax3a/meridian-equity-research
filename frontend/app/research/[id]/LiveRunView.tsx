@@ -70,6 +70,19 @@ export function LiveRunView({ sessionId }: { sessionId: string }) {
     refresh();
   }, [events.length, refresh]);
 
+  // Fallback poll, used ONLY while the live stream is not connected. The stream is an optimisation, not
+  // the source of truth: when it is unavailable (a proxy that buffers, a network that blocks
+  // text/event-stream) this view would otherwise sit on whatever it fetched at mount and show "Queued"
+  // for a run that has already finished. Polling while the stream is healthy would duplicate the
+  // event-driven refresh above and burn through the API rate limit for no benefit.
+  useEffect(() => {
+    const status = detail?.status;
+    if (!status || TERMINAL_RUN_STATUSES.includes(status)) return;
+    if (streamStatus === "open") return;
+    const timer = setInterval(refresh, 5000);
+    return () => clearInterval(timer);
+  }, [detail?.status, streamStatus, refresh]);
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -140,7 +153,7 @@ export function LiveRunView({ sessionId }: { sessionId: string }) {
           {detail.plan && (
             <Card>
               <SectionHeading>Plan</SectionHeading>
-              <PlanView plan={detail.plan} />
+              <PlanView plan={detail.plan} live={status.agents} />
             </Card>
           )}
           <Card>

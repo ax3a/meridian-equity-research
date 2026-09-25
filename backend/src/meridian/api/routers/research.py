@@ -27,6 +27,7 @@ from meridian.schemas.api import (
     TraceView,
 )
 from meridian.schemas.enums import RunStatus
+from meridian.schemas.events import ProgressEvent
 from meridian.schemas.report import ResearchReport
 from meridian.schemas.research import HumanFeedback, ResearchRequest
 from meridian.schemas.state import ResearchState
@@ -179,6 +180,17 @@ def _require_awaiting_approval(state: ResearchState) -> None:
 _EVENT_POLL_TIMEOUT_SECONDS = 15.0
 
 
+def _sse(event: ProgressEvent) -> ServerSentEvent:
+    """Emit as the DEFAULT event type rather than naming it after `event.type`.
+
+    A named SSE event only reaches a browser listener registered for that exact name; the standard
+    `EventSource.onmessage` handler never fires for one. Naming these after the event type meant the
+    live view silently received nothing and sat on "Queued" while the run finished behind it. The type
+    is already in the payload, so clients filter on that and any new event type works without a
+    matching client change.
+    """
+    return ServerSentEvent(id=str(event.seq), data=event.model_dump_json())
+
 async def _stream_events(runtime: Runtime, session_id: str, after_seq: int) -> AsyncIterator[ServerSentEvent]:
     # A client reconnecting after the run already finished would otherwise hang forever: the runner only
     # wakes subscribers that were registered *before* it closed them out. Replay-then-return here avoids
@@ -188,7 +200,7 @@ async def _stream_events(runtime: Runtime, session_id: str, after_seq: int) -> A
         return
     if state.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
         for event in await runtime.store.list_events_since(session_id, after_seq):
-            yield ServerSentEvent(id=str(event.seq), event=event.type.value, data=event.model_dump_json())
+            yield _sse(event)
         return
 
     subscription = runtime.runner.subscribe(session_id, after_seq=after_seq).__aiter__()
@@ -204,7 +216,7 @@ async def _stream_events(runtime: Runtime, session_id: str, after_seq: int) -> A
             continue
         except StopAsyncIteration:
             return
-        yield ServerSentEvent(id=str(event.seq), event=event.type.value, data=event.model_dump_json())
+        yield _sse(event)
 
 
 @router.get("/research/{session_id}/events")
