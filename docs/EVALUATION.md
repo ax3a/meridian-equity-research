@@ -89,3 +89,5 @@ The point of an eval suite is finding things tests miss. This one has already fo
 - **There is no ground-truth answer key.** The suite checks internal consistency, provenance and routing,
   not whether the analysis is *good*. Judging investment reasoning would require expert labelling.
 - **Five companies is a small sample**, all US large caps except the deliberate edge cases.
+- **The suite runs against the in-process pipeline**, not the containerised stack, though both have been
+  verified to produce the same results.

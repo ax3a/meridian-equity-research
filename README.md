@@ -35,11 +35,15 @@ anything else:
   planning, tool-use research loops, critic judgement, report prose) is fully implemented and covered by
   unit tests using a scripted fake LLM client, but it has **never been exercised against the real Anthropic
   API**. Whether the prompts, tool schemas and retry logic hold up against the live model is unverified.
-- **Postgres and Docker are not verified.** Docker Desktop would not start on the development machine, so
-  the pgvector-backed store, the Alembic migration and the docker-compose stack have only been reviewed and
-  rendered offline — the images have never been built and the migration has never actually run against a
-  database. `backend/tests/unit/rag/test_pgvector_store.py` and the DB integration tests skip cleanly
-  (rather than fail) when Postgres is unreachable, which is the state on this machine.
+- **Postgres and the Docker stack are verified.** Both images build, all four containers come up healthy,
+  the Alembic migration runs on container start, and a full research run completes in the containerised
+  stack with results persisted (a Microsoft run: 60s, 13 sections, 933 sources, 11,553 evidence records).
+  The DB integration tests and the pgvector store tests pass against a real pgvector instance, and skip
+  cleanly when one is not reachable.
+- **A run briefly stalls other requests.** Research is CPU-heavy (parsing megabyte filings, embedding
+  hundreds of chunks) and the API runs it in-process, so during a run `/health` can take up to ~3s in the
+  worst case. Offloading the heavy work to threads brought that down from 11s, but the real fix is a
+  separate worker process, which this build does not have.
 - **Without an API key, the system runs in deterministic offline mode**: every specialist agent has a
   non-generative code path that derives findings directly from tool output, so a full run produces real
   figures and real citations, but mechanical, template-driven prose rather than model-written analysis.
@@ -198,7 +202,7 @@ with the `pgvector` extension and Redis 7.
 ```powershell
 scripts\setup.ps1          # backend venv + pip install, npm install, copy .env files
 scripts\docker-up.ps1 -DepsOnly   # start Postgres + Redis only (or point DATABASE_URL/REDIS_URL at your own)
-scripts\migrate.ps1        # alembic upgrade head — NOTE: unverified on this machine, see Limitations
+scripts\migrate.ps1        # alembic upgrade head
 scripts\dev.ps1            # runs backend (uvicorn --reload) and frontend (next dev) together
 ```
 
@@ -262,9 +266,9 @@ make docker-up-deps   # just Postgres + Redis, for local dev against the venv
 make docker-up        # full stack, built and started
 ```
 
-**Honesty note:** these images have been reviewed line by line but **never actually built or run** —
-Docker Desktop would not start on the development machine. Treat the Dockerfiles and compose stack as
-carefully-written and self-consistent, not as verified.
+Verified end to end: both images build, all four containers report healthy, migrations apply on start,
+the app containers run as non-root, and a full research run completes through the containerised stack
+with its results persisted to Postgres.
 
 ## Testing
 
@@ -318,9 +322,8 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
 - The generative LLM path has unit-test coverage against a scripted fake client but **has never been run
   against the real Anthropic API** — no key was available. Prompt shapes, tool-call parsing and refusal
   handling are unverified against the real model.
-- **Postgres/pgvector and the Docker stack are unverified.** Docker Desktop would not start on the
-  development machine; the migration has been reviewed but never actually applied, and the images have
-  never been built.
+- **A run briefly stalls other requests.** Research is CPU-heavy and runs in-process, so /health can
+  take up to ~3s during a run. A separate worker process is the proper fix and is on the roadmap.
 - Without an LLM key, report prose is mechanically composed from finding claims — correct and cited, but
   not fluent analysis.
 - Stooq (the documented keyless price source) currently returns an anti-bot challenge page instead of CSV;

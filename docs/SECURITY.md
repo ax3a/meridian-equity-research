@@ -94,6 +94,9 @@ cannot leak into recorded data.
 - **Injection detection is pattern-based** and will not catch every phrasing. It is deliberately a
   secondary control; the structural separation is what the design relies on.
 - **No dependency vulnerability scanning** is wired into CI yet.
+- **Optional integrations must be left blank, not empty-stringed.** A blank key now means `unset`; before
+  that fix, a blank LangSmith key switched tracing on and shipped run traces to an external service with
+  no credentials. Anything added later should follow the same rule.
 - **The offline LLM path cannot be socially engineered, but the Anthropic path has never been exercised
   against the real API**, so the tool-loop's behaviour under adversarial evidence is untested in practice.
 - **Rate limiting is per process.** Running multiple API instances without shared Redis would multiply the
