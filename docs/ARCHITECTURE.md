@@ -176,6 +176,47 @@ same check to its own generated prose (`_numbers_not_grounded_in_metrics` in `re
 retries a section, or falls back to deterministic composition, if a number doesn't match anything in the
 metrics table.
 
+## Execution model
+
+A research run is CPU- and network-heavy: it parses megabyte filings, embeds hundreds of chunks and
+makes dozens of provider calls. Running that on the API's event loop means request latency depends on
+what some unrelated run is doing, and it caps the whole system at one machine.
+
+`RUN_EXECUTOR` selects between two shapes, and the routers never branch on which is active -- they call
+a `RunDispatcher` (`api/dispatch.py`).
+
+**`inprocess`** is the original behaviour and the default: the API drives the graph itself. The CLI and
+the test suite use it, and it needs neither Redis nor a worker.
+
+**`worker`** (what Docker Compose sets) splits the work:
+
+1. `POST /research` admits the run, persists its initial state and pushes a job onto a Redis list. The
+   response returns immediately with `status: queued`, and the run is already durable -- a read of it
+   never 404s while it waits.
+2. A worker process (`meridian.worker`) pops the job and drives the graph, checkpointing to Postgres
+   after every step.
+3. The worker writes each progress event to `research_events` *and* publishes it on a per-session Redis
+   channel. The API forwards those to whichever SSE connection is watching, so live progress works even
+   though the run is in another process.
+4. Approval and cancellation travel the same queue, so they reach the worker that holds the run.
+
+Two things make this safe rather than merely distributed:
+
+- **Claims.** A worker takes a Redis key with a TTL before executing a session and refreshes it while it
+  runs, so two workers never drive the same graph thread. A worker that dies cannot release its claim,
+  so the claim is allowed to lapse rather than being held forever.
+- **Recovery.** A sweep (at startup and then on a timer) looks for runs that are non-terminal and
+  unclaimed, and re-queues them. Because the checkpoint survived, the run *resumes* rather than
+  restarting: `execute_pending` invokes the graph with `None` when a checkpoint exists, which continues
+  the thread instead of re-running agents that already finished. Runs parked at `awaiting_approval` are
+  excluded -- they are waiting for a person, not for a worker.
+
+Admission differs between the two shapes because the truth lives somewhere different. In-process, a
+counter in the API is exact. With workers, several API replicas admit against a pool of workers none of
+them owns, so capacity is read from the shared run store instead. That read is not a reservation, so the
+cap is approximate by a run or two under simultaneous requests -- deliberately traded for not having
+every replica admit the full limit independently.
+
 ## Persistence and caching
 
 - **Postgres** (`db/models.py`, `db/migrations/versions/0001_initial.py`) stores research sessions, tasks,
@@ -183,11 +224,16 @@ metrics table.
   feedback, progress events (with a per-session monotonic `seq` for SSE replay), research memory (with
   expiry), and the pgvector `documents`/`document_chunks` tables the RAG pipeline reads and writes. Every
   repository takes an already-open `AsyncSession` and never opens its own transaction — the caller
-  controls commit boundaries. **This has not been run against a real database on this machine** (see
-  README); the schema and repositories are covered by unit tests that don't touch a database, and
-  integration tests that are marked `@pytest.mark.integration` and skip cleanly when Postgres is
+  controls commit boundaries. Verified against a real pgvector instance: the integration suite is marked
+  `@pytest.mark.integration`, runs against Postgres in CI and in Docker, and skips cleanly when it is
   unreachable.
-- **Redis** backs two independent things, each with its own fallback: the `HttpClient`'s response cache
+- **The LangGraph checkpointer** (`graph/checkpointing.py`) is Postgres-backed whenever a database is
+  reachable, and in-memory otherwise. This is what makes a run outlive the process executing it, and
+  what lets the API read the live state of a run a worker owns -- `aget_state` reads the same rows the
+  worker writes. The tables belong to LangGraph and are created by its own idempotent `setup()` rather
+  than by an Alembic migration, because their schema is versioned by the library, not by this project.
+- **Redis** backs four independent things, each with its own fallback: the run queue and the progress
+  event bus described under *Execution model*, plus the `HttpClient`'s response cache
   (`cache/` — TTL policy per data kind, e.g. quotes refresh faster than a company profile) and the API's
   rate limiter (`api/security.py`'s `RateLimiter`, a fixed one-minute window per API key or client IP).
   Both degrade to an in-process, single-instance equivalent the first time Redis stops answering, rather

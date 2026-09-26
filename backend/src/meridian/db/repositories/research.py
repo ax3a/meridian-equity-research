@@ -20,7 +20,7 @@ from meridian.db.models import (
     ResearchTaskModel,
 )
 from meridian.schemas.analysis import CriticReview
-from meridian.schemas.enums import TERMINAL_RUN_STATUSES, RunStatus
+from meridian.schemas.enums import RECOVERABLE_RUN_STATUSES, TERMINAL_RUN_STATUSES, RunStatus
 from meridian.schemas.findings import AgentOutput
 from meridian.schemas.research import CompanyIdentity, HumanFeedback, ResearchRequest, ResearchTask
 from meridian.schemas.state import ApprovalState, ResearchState
@@ -284,6 +284,20 @@ class ResearchRepository:
                 submitted_at=fb.submitted_at or utcnow(),
             )
         )
+
+    async def list_recoverable(self) -> list[str]:
+        """Sessions that were executing when their worker stopped.
+
+        Only genuinely mid-flight states: `queued` and `researching`. A run parked in
+        `awaiting_approval` is waiting for a person, not for a worker, and must not be resumed by one.
+        """
+        stmt = (
+            select(ResearchSessionModel.id)
+            .where(ResearchSessionModel.status.in_({s.value for s in RECOVERABLE_RUN_STATUSES}))
+            .order_by(ResearchSessionModel.created_at)
+        )
+        result = await self._session.execute(stmt)
+        return [str(row) for row in result.scalars().all()]
 
     async def count_active(self) -> int:
         terminal = {s.value for s in TERMINAL_RUN_STATUSES}

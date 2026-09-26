@@ -14,71 +14,21 @@ write_report depending on why the batch that just finished was dispatched (see `
 
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from meridian.agents import contracts as agent_contracts
 from meridian.core.config import Settings
 from meridian.graph import nodes, routing
+from meridian.graph.checkpointing import memory_checkpointer
 from meridian.graph.nodes import WorkerInput
-from meridian.memory import types as memory_types
 from meridian.observability.events import EventSink
 from meridian.schemas import (
-    analysis,
-    citations,
-    enums,
-    events,
-    financials,
-    findings,
-    report,
-    research,
     state,
-    telemetry,
 )
-
-
-def _meridian_msgpack_allowlist() -> set[tuple[str, str]]:
-    """Every class defined in the meridian modules the graph state can carry.
-
-    LangGraph 1.2's checkpoint serializer logs "Deserializing unregistered type" for any class it has to
-    reconstruct that isn't on this allowlist. Rather than hand-list every schema/enum (and have that list
-    silently go stale as other tasks add fields), we walk the modules that make up `ResearchState` and its
-    nested schemas plus the graph/agents/memory contracts, and collect every class actually defined there.
-    Any new class added to one of these modules is picked up automatically the next time the process starts.
-    """
-    modules = (
-        analysis,
-        citations,
-        enums,
-        events,
-        findings,
-        financials,
-        report,
-        research,
-        state,
-        telemetry,
-        agent_contracts,
-        memory_types,
-        nodes,
-    )
-    allowed: set[tuple[str, str]] = set()
-    for module in modules:
-        for obj in vars(module).values():
-            if inspect.isclass(obj) and obj.__module__.startswith("meridian"):
-                allowed.add((obj.__module__, obj.__name__))
-    return allowed
-
-
-def default_checkpointer() -> InMemorySaver:
-    """An `InMemorySaver` whose serializer knows about every meridian type, warning-free."""
-    serde = JsonPlusSerializer(allowed_msgpack_modules=_meridian_msgpack_allowlist())
-    return InMemorySaver(serde=serde)
 
 
 def build_graph(
@@ -118,4 +68,4 @@ def build_graph(
     graph.add_edge("write_report", "finalize")
     graph.add_edge("finalize", END)
 
-    return graph.compile(checkpointer=checkpointer or default_checkpointer())
+    return graph.compile(checkpointer=checkpointer or memory_checkpointer())

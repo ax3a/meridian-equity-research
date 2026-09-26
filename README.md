@@ -40,12 +40,14 @@ anything else:
   stack with results persisted (a Microsoft run: 60s, 13 sections, 933 sources, 11,553 evidence records).
   The DB integration tests and the pgvector store tests pass against a real pgvector instance, and skip
   cleanly when one is not reachable.
-- **Runs execute in the API process, capped at four at once.** A fifth concurrent request is refused
-  with `429 too_many_active_runs` rather than queued. Measured `/health` latency: ~60ms idle, p95 264ms
-  beside one cold run, p95 792ms (worst observed 2.2s) with four cold runs saturating the cap. The real
-  ceiling is not latency but durability — in-flight runs live in an in-memory checkpointer and do not
-  survive a restart. A separate worker process with a persistent checkpointer is the fix, and this build
-  does not have one.
+- **Runs execute in a worker process, not the API.** The API persists the request, puts a job on a
+  Redis queue and returns; a worker pops it and drives the graph. Graph state is checkpointed to
+  Postgres after every step, so a run survives the worker dying: kill a worker mid-run with SIGKILL and
+  the restarted one resumes that run from its last checkpoint rather than starting over (verified —
+  it finished and produced its report). Progress still streams live over SSE, because the worker
+  publishes events on Redis and the API forwards them to the browser. Scale with
+  `docker compose up -d --scale worker=3`. Set `RUN_EXECUTOR=inprocess` to run everything in the API
+  instead, which is what the CLI and the tests do.
 - **Without an API key, the system runs in deterministic offline mode**: every specialist agent has a
   non-generative code path that derives findings directly from tool output, so a full run produces real
   figures and real citations, but mechanical, template-driven prose rather than model-written analysis.
@@ -105,8 +107,12 @@ flowchart LR
 
     subgraph Backend["FastAPI backend"]
         API["/api/v1 routers + SSE stream"]
+        Dispatch["RunDispatcher<br/>(admit, then queue)"]
+    end
+
+    subgraph Worker["Worker process (scale out)"]
         Runner["ResearchRunner<br/>(asyncio run manager)"]
-        Graph["LangGraph StateGraph"]
+        Graph["LangGraph StateGraph<br/>(Postgres checkpointer)"]
         Agents["13 agents<br/>(supervisor, 8 specialists, bull, bear, critic, writer)"]
         Tools["19 typed tools<br/>(allowlisted per agent)"]
         Providers["Provider fallback chains"]
@@ -114,8 +120,8 @@ flowchart LR
     end
 
     subgraph Data["Storage"]
-        PG[("Postgres 16 + pgvector")]
-        Redis[("Redis cache + rate limiter")]
+        PG[("Postgres 16 + pgvector<br/>runs, evidence, checkpoints")]
+        Redis[("Redis<br/>cache, rate limiter, run queue, event bus")]
     end
 
     subgraph External["External data (keyless by default)"]
@@ -127,14 +133,17 @@ flowchart LR
     end
 
     FE -- "server-side proxy injects X-API-Key" --> API
-    API --> Runner --> Graph --> Agents
+    API --> Dispatch -- "run job" --> Redis
+    Redis -- "job" --> Runner --> Graph --> Agents
     Agents --> Tools --> Providers
     Agents --> RAG
     Providers --> SEC & Yahoo & GDELT & Treasury
     Agents -. "generative mode only" .-> Anthropic
     RAG --> PG
     Providers -. "cache" .-> Redis
-    Runner --> PG
+    Runner -- "state + checkpoints" --> PG
+    Runner -- "progress events" --> Redis
+    Redis -- "events" --> API
     API -. "rate limiting" .-> Redis
 ```
 
@@ -282,20 +291,23 @@ server-side only; the browser never sees the API key.
 
 ## Docker
 
-`docker-compose.yml` at the repo root defines `db` (pgvector/pgvector:pg16) and `redis` (redis:7-alpine) as
-always-on datastore services, plus `backend` and `frontend` app services behind a `full` profile.
+`docker-compose.yml` at the repo root defines `db` (pgvector/pgvector:pg16) and `redis` (redis:7-alpine)
+as always-on datastore services, plus `backend`, `worker` and `frontend` behind a `full` profile.
 `docker/backend.Dockerfile` and `docker/frontend.Dockerfile` are multi-stage, non-root, healthchecked
-images (`docker/backend-entrypoint.sh` waits for Postgres and runs `alembic upgrade head` before starting
-uvicorn).
+images. The worker shares the backend image and entrypoint, with `RUN_MIGRATIONS=0`: the API owns the
+schema, and two containers running `alembic upgrade head` at once race on the version table, so the
+worker waits for the schema instead of applying it.
 
 ```bash
 make docker-up-deps   # just Postgres + Redis, for local dev against the venv
 make docker-up        # full stack, built and started
+docker compose up -d --scale worker=3   # more workers; they coordinate through Redis
 ```
 
-Verified end to end: both images build, all four containers report healthy, migrations apply on start,
-the app containers run as non-root, and a full research run completes through the containerised stack
-with its results persisted to Postgres.
+Verified end to end: all five containers report healthy, migrations apply on start, the app containers
+run as non-root, and a run submitted to the API executes in the worker, streams its progress to the
+browser over SSE, and persists its report to Postgres. Killing a worker mid-run with SIGKILL leaves the
+run recoverable: the restarted worker resumes it from its last checkpoint and it completes.
 
 ## Testing
 
@@ -355,10 +367,17 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
 - The generative LLM path has unit-test coverage against a scripted fake client but **has never been run
   against the real Anthropic API** — no key was available. Prompt shapes, tool-call parsing and refusal
   handling are unverified against the real model.
-- **Runs execute in the API process, capped at four concurrent** (`MAX_CONCURRENT_RUNS`); a fifth is
-  refused with `429`, not queued. Measured `/health`: ~60ms idle, p95 264ms alongside one cold run,
-  p95 792ms and a worst observed 2.2s with the cap saturated. The binding limit is durability, not
-  latency: the LangGraph checkpointer is in-memory, so a restart loses any run still in flight.
+- **Admission is capped at four concurrent runs** (`MAX_CONCURRENT_RUNS`); a fifth is refused with
+  `429`, not queued. In worker mode that cap is checked against the shared run store, which is a read
+  rather than a reservation — two simultaneous requests can both be admitted, so the effective limit is
+  approximate by a run or two.
+- **A crashed worker's run is recovered on a timer, not instantly.** The dead worker's claim has to
+  expire (90s) before a sweep (every 60s) can re-queue the run, so recovery took 83s in testing. A run
+  parked at `awaiting_approval` is never auto-resumed: it is waiting for a person, and resuming it
+  would walk straight through the approval gate.
+- **Single-process mode is still the default** (`RUN_EXECUTOR=inprocess`) and is what the CLI and the
+  test suite exercise. Docker compose sets `worker`. Without Redis, worker mode falls back to
+  in-process with a warning rather than failing to start.
 - Without an LLM key, report prose is mechanically composed from finding claims — correct and cited, but
   not fluent analysis.
 - Stooq (the documented keyless price source) currently returns an anti-bot challenge page instead of CSV;
@@ -377,8 +396,8 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
 ## Roadmap
 
 - Verify the generative LLM path against the real Anthropic API and tune prompts based on real model output.
-- A persistent LangGraph checkpointer plus a worker process, so an in-flight run survives a restart and
-  concurrency is bounded by workers rather than by one event loop.
+- Reserve admission atomically rather than reading the active count, so the concurrency cap is exact
+  across API replicas instead of approximate.
 - A keyed market-data provider (FMP/Polygon) as the default primary, with Yahoo/Stooq as fallback only.
 - Extract filing tables as structured rows rather than flattening them into text, so the figures in them
   become citable metrics instead of being filtered out of claims.

@@ -127,3 +127,7 @@ class DbRunStore:
     async def count_active(self) -> int:
         async with self._sessions() as session:
             return await ResearchRepository(session).count_active()
+
+    async def list_recoverable(self) -> list[str]:
+        async with self._sessions() as session:
+            return await ResearchRepository(session).list_recoverable()

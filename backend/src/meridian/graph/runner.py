@@ -18,7 +18,8 @@ from meridian.core.config import Settings
 from meridian.core.ids import new_id
 from meridian.core.logging import get_logger
 from meridian.graph.builder import build_graph
-from meridian.schemas.enums import RunStatus
+from meridian.observability.bus import EventBus, NullEventBus
+from meridian.schemas.enums import TERMINAL_RUN_STATUSES, RunStatus
 from meridian.schemas.events import EventType, ProgressEvent
 from meridian.schemas.research import HumanFeedback, ResearchRequest
 from meridian.schemas.state import ResearchState
@@ -38,6 +39,11 @@ class RunStore(Protocol):
         ...
 
     async def list_events_since(self, session_id: str, after_seq: int) -> list[ProgressEvent]: ...
+
+    async def count_active(self) -> int:
+        """Runs not in a terminal state. Every implementation had this; the protocol did not say so,
+        so a caller working through the protocol could not use it."""
+        ...
 
 
 class InMemoryRunStore:
@@ -63,13 +69,22 @@ class InMemoryRunStore:
     async def list_events_since(self, session_id: str, after_seq: int) -> list[ProgressEvent]:
         return [e for e in self._events.get(session_id, []) if e.seq > after_seq]
 
+    async def count_active(self) -> int:
+        return sum(1 for state in self._states.values() if state.status not in TERMINAL_RUN_STATUSES)
+
+
+# Events after which no more will arrive for a session, so a cross-process subscriber can stop.
+# AWAITING_APPROVAL is included: the run is idle until a human acts, and the resume opens a new stream.
+_TERMINAL_EVENT_TYPES = frozenset({EventType.RUN_COMPLETED, EventType.RUN_FAILED, EventType.AWAITING_APPROVAL})
+
 
 class _RouterEventSink:
     """The single `EventSink` bound into the (once-built) graph; routes each event by `session_id`."""
 
-    def __init__(self, store: RunStore, subscribers: dict[str, list[Any]]) -> None:
+    def __init__(self, store: RunStore, subscribers: dict[str, list[Any]], bus: EventBus | None = None) -> None:
         self._store = store
         self._subscribers = subscribers
+        self._bus = bus or NullEventBus()
 
     async def emit(self, event: ProgressEvent) -> None:
         """Record progress, then fan out to live subscribers.
@@ -89,6 +104,9 @@ class _RouterEventSink:
             )
         for queue in list(self._subscribers.get(event.session_id, [])):
             queue.put_nowait(event)
+        # Reaches subscribers in *other* processes -- the API holding an SSE connection for a run this
+        # worker is executing. A no-op on the null bus, so single-process behaviour is unchanged.
+        await self._bus.publish(event)
 
 
 def _coerce_state(raw: Any) -> ResearchState:
@@ -109,12 +127,14 @@ class ResearchRunner:
         *,
         store: RunStore | None = None,
         checkpointer: BaseCheckpointSaver[Any] | None = None,
+        bus: EventBus | None = None,
     ) -> None:
         self.agents = agents
         self.settings = settings
         self.store: RunStore = store or InMemoryRunStore()
+        self.bus: EventBus = bus or NullEventBus()
         self._subscribers: dict[str, list[Any]] = defaultdict(list)
-        self._sink = _RouterEventSink(self.store, self._subscribers)
+        self._sink = _RouterEventSink(self.store, self._subscribers, self.bus)
         self.app = build_graph(agents, settings, self._sink, checkpointer=checkpointer)
         # Entries are removed as each run settles. Left to accumulate, every finished run's Task -- and
         # the coroutine frame it holds -- stayed here for the life of the process.
@@ -131,15 +151,58 @@ class ResearchRunner:
         """
         return {"configurable": {"thread_id": session_id}, "recursion_limit": self.settings.graph_recursion_limit}
 
-    async def start(self, request: ResearchRequest) -> str:
+    async def create(self, request: ResearchRequest) -> str:
+        """Register a run and persist its initial state, without executing it.
+
+        Split out of `start` so the API can accept a request and hand execution to a worker: the run is
+        durably `queued` the moment this returns, so a read of it never 404s while it waits for a slot.
+        """
         session_id = new_id("run")
         require_approval = (
             request.require_approval if request.require_approval is not None else self.settings.require_approval_default
         )
         initial = ResearchState(session_id=session_id, request=request, require_approval=require_approval)
         await self.store.save_state(session_id, initial)
-        self._tasks[session_id] = asyncio.create_task(self._drive(session_id, initial))
         return session_id
+
+    async def start(self, request: ResearchRequest) -> str:
+        """Create a run and execute it in this process."""
+        session_id = await self.create(request)
+        state = await self.store.get_state(session_id)
+        self._tasks[session_id] = asyncio.create_task(self._drive(session_id, state))
+        return session_id
+
+    async def execute_pending(self, session_id: str) -> None:
+        """Drive a run this process did not create, and wait for it to settle.
+
+        The worker's entry point. The state comes from the store rather than from a request object,
+        which is the whole point: the API created it, possibly in another process.
+
+        A run interrupted by a worker dying already has checkpoints, and LangGraph continues such a
+        thread when invoked with `None` rather than a fresh state. Passing the stored state instead
+        would re-run every agent that had already finished: wasted work, duplicated evidence, and a
+        second round of tool calls against SEC.
+        """
+        state = await self.store.get_state(session_id)
+        if state is None:
+            log.warning("run_not_found_for_execution", session_id=session_id)
+            return
+        graph_input: Any = state
+        if await self.has_resumable_checkpoint(session_id):
+            log.info("resuming_from_checkpoint", session_id=session_id, status=state.status.value)
+            graph_input = None
+        task = asyncio.create_task(self._drive(session_id, graph_input))
+        self._tasks[session_id] = task
+        await task
+
+    async def has_resumable_checkpoint(self, session_id: str) -> bool:
+        """Whether the graph holds partial progress for this thread that it could continue from."""
+        try:
+            snapshot = await self.app.aget_state(self._config(session_id))
+        except Exception as exc:
+            log.warning("checkpoint_probe_failed", session_id=session_id, error=str(exc))
+            return False
+        return bool(snapshot.values) and bool(snapshot.next)
 
     def resume(self, session_id: str, feedback: list[HumanFeedback] | list[dict[str, Any]] | None) -> None:
         """Continue a paused run with human feedback (an empty/approve-only list just approves).
@@ -210,9 +273,29 @@ class ResearchRunner:
     async def status(self, session_id: str) -> ResearchState | None:
         return await self.store.get_state(session_id)
 
+    async def _forward_bus(self, session_id: str, queue: asyncio.Queue[ProgressEvent | None]) -> None:
+        """Feed events published by another process into this subscriber's queue.
+
+        The run may be executing in a worker, in which case nothing local ever emits for it. Terminal
+        events close the queue so the SSE response ends instead of hanging on a finished run.
+        """
+        try:
+            async for event in self.bus.listen(session_id):
+                queue.put_nowait(event)
+                if event.type in _TERMINAL_EVENT_TYPES:
+                    queue.put_nowait(None)
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("event_bus_listen_failed", session_id=session_id, error=str(exc))
+
     async def subscribe(self, session_id: str, after_seq: int = 0) -> AsyncIterator[ProgressEvent]:
         queue: asyncio.Queue[ProgressEvent | None] = asyncio.Queue()
         self._subscribers[session_id].append(queue)
+        forwarder: asyncio.Task[None] | None = None
+        if not isinstance(self.bus, NullEventBus):
+            forwarder = asyncio.create_task(self._forward_bus(session_id, queue))
         last_seq = after_seq
         try:
             for event in await self.store.list_events_since(session_id, after_seq):
@@ -226,6 +309,8 @@ class ResearchRunner:
                     last_seq = item.seq
                     yield item
         finally:
+            if forwarder is not None:
+                forwarder.cancel()
             subs = self._subscribers.get(session_id)
             if subs and queue in subs:
                 subs.remove(queue)

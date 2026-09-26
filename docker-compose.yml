@@ -46,6 +46,8 @@ services:
       # localhost — these override whatever localhost-oriented values are in .env.
       DATABASE_URL: postgresql+asyncpg://meridian:meridian@db:5432/meridian
       REDIS_URL: redis://redis:6379/0
+      # Hand execution to the worker service. Set "inprocess" to run everything in the API instead.
+      RUN_EXECUTOR: worker
     ports:
       - "8000:8000"
     depends_on:
@@ -59,6 +61,47 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 5
+
+  # Executes research runs pulled from the Redis queue, so nothing CPU-heavy shares the API's event
+  # loop. Shares the backend image and entrypoint; RUN_MIGRATIONS=0 because the API owns the schema and
+  # two containers running alembic at once race on the version table. Scale with
+  # `docker compose up -d --scale worker=3`.
+  worker:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    profiles: ["full"]
+    command: ["python", "-m", "meridian.worker"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://meridian:meridian@db:5432/meridian
+      REDIS_URL: redis://redis:6379/0
+      RUN_MIGRATIONS: "0"
+      WORKER_CONCURRENCY: "2"
+      WORKER_HEARTBEAT_PATH: /tmp/meridian-worker-alive
+    # The worker serves no HTTP, so it must not inherit the API image's curl healthcheck -- it would
+    # report unhealthy while working perfectly, and anything gated on `service_healthy` would stall.
+    # The worker touches a heartbeat file while it is consuming; stale means wedged.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os,sys,time;
+          p=os.environ['WORKER_HEARTBEAT_PATH'];
+          sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 60 else 1)"
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 4
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
   frontend:
     build:

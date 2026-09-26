@@ -93,6 +93,9 @@ class RunStatus(StrEnum):
 
 
 TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
+# States a worker can pick a run back up from. AWAITING_APPROVAL is deliberately absent: that run
+# is waiting for a person, and resuming it automatically would skip the approval gate.
+RECOVERABLE_RUN_STATUSES = frozenset({RunStatus.QUEUED, RunStatus.RESEARCHING})
 
 
 class SourceKind(StrEnum):

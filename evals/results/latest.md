@@ -1,6 +1,6 @@
 # Meridian evaluation scorecard
 
-Generated 2026-09-26T11:03:19+00:00 · LLM mode: **offline** · data mode: **auto**
+Generated 2026-09-26T13:17:14+00:00 · LLM mode: **offline** · data mode: **auto**
 
 Offline LLM mode means narrative text is template-based; figures and citations are real either way.
 
@@ -8,11 +8,11 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 
 | Case | Resolved | Passed | Latency | Notes |
 | --- | --- | --- | --- | --- |
-| `msft` | MSFT | yes | 36.5s |  |
-| `nvda_focus` | NVDA | yes | 71.9s |  |
-| `aapl` | AAPL | yes | 59.1s |  |
-| `jpm_bank` | JPM | yes | 49.5s |  |
-| `quick_depth` | MSFT | yes | 19.4s |  |
+| `msft` | MSFT | yes | 31.7s |  |
+| `nvda_focus` | NVDA | yes | 42.5s |  |
+| `aapl` | AAPL | yes | 49.5s |  |
+| `jpm_bank` | JPM | yes | 48.4s |  |
+| `quick_depth` | MSFT | yes | 43.8s |  |
 | `unknown_company` | - | yes | 0.6s | failed cleanly |
 
 ## Metrics by case
@@ -31,7 +31,7 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | report_completeness | 1.000 | missing sections: none (expected 6 for this depth) |
 | tool_success_rate | 0.971 | 33/34 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 34 tool calls (0 tokens means offline mode) |
-| latency_seconds | 36.500 | wall-clock time for the whole run |
+| latency_seconds | 31.700 | wall-clock time for the whole run |
 
 ### nvda_focus
 
@@ -47,7 +47,7 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | report_completeness | 1.000 | missing sections: none (expected 6 for this depth) |
 | tool_success_rate | 0.970 | 32/33 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 33 tool calls (0 tokens means offline mode) |
-| latency_seconds | 71.900 | wall-clock time for the whole run |
+| latency_seconds | 42.500 | wall-clock time for the whole run |
 
 ### aapl
 
@@ -63,7 +63,7 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | report_completeness | 1.000 | missing sections: none (expected 6 for this depth) |
 | tool_success_rate | 1.000 | 33/33 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 33 tool calls (0 tokens means offline mode) |
-| latency_seconds | 59.100 | wall-clock time for the whole run |
+| latency_seconds | 49.500 | wall-clock time for the whole run |
 
 ### jpm_bank
 
@@ -79,7 +79,7 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | report_completeness | 1.000 | missing sections: none (expected 6 for this depth) |
 | tool_success_rate | 0.969 | 31/32 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 32 tool calls (0 tokens means offline mode) |
-| latency_seconds | 49.500 | wall-clock time for the whole run |
+| latency_seconds | 48.400 | wall-clock time for the whole run |
 
 ### quick_depth
 
@@ -95,7 +95,7 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | report_completeness | 1.000 | missing sections: none (expected 4 for this depth) |
 | tool_success_rate | 0.971 | 33/34 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 34 tool calls (0 tokens means offline mode) |
-| latency_seconds | 19.400 | wall-clock time for the whole run |
+| latency_seconds | 43.800 | wall-clock time for the whole run |
 
 ## Prompt injection
 

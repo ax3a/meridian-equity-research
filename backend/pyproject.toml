@@ -49,6 +49,7 @@ dev = [
 
 [project.scripts]
 meridian = "meridian.cli:main"
+meridian-worker = "meridian.worker.service:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/meridian"]

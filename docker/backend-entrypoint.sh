@@ -36,8 +36,37 @@ else:
     sys.exit(1)
 PY
 
-echo "[entrypoint] running database migrations (alembic upgrade head)..."
-alembic upgrade head
+# The worker shares this image and entrypoint but sets RUN_MIGRATIONS=0: two containers running
+# `alembic upgrade head` against one database at the same time race on the version table. The API
+# owns the schema; the worker waits for it to exist instead.
+if [ "${RUN_MIGRATIONS:-1}" = "1" ]; then
+  echo "[entrypoint] running database migrations (alembic upgrade head)..."
+  alembic upgrade head
+else
+  echo "[entrypoint] skipping migrations (RUN_MIGRATIONS=0); waiting for the schema instead"
+  python <<'PY'
+import os
+import sys
+import time
+
+import psycopg
+
+sync_url = os.environ.get("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+deadline = time.monotonic() + float(os.environ.get("SCHEMA_WAIT_TIMEOUT_SECONDS", "120"))
+while time.monotonic() < deadline:
+    try:
+        with psycopg.connect(sync_url, connect_timeout=3) as conn:
+            row = conn.execute("select to_regclass('public.research_sessions')").fetchone()
+            if row and row[0]:
+                print("[entrypoint] schema is present")
+                sys.exit(0)
+    except Exception as exc:
+        print(f"[entrypoint] waiting for schema: {exc}")
+    time.sleep(2)
+print("[entrypoint] schema did not appear in time", file=sys.stderr)
+sys.exit(1)
+PY
+fi
 
 echo "[entrypoint] starting: $*"
 exec "$@"

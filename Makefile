@@ -7,7 +7,7 @@
 # would type by hand, so there is nothing "magic" hidden behind `make`.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev test test-backend test-frontend lint lint-backend lint-frontend \
+.PHONY: help setup dev worker test test-backend test-frontend lint lint-backend lint-frontend \
         format format-backend format-frontend docker-up docker-up-deps docker-down migrate eval
 
 BACKEND_DIR := backend
@@ -23,7 +23,8 @@ help:
 	@echo "  make lint         - ruff check (backend) + eslint/tsc (frontend)"
 	@echo "  make format       - ruff format (backend) + eslint --fix (frontend)"
 	@echo "  make migrate      - alembic upgrade head against DATABASE_URL"
-	@echo "  make docker-up    - docker compose --profile full up -d --build (full stack)"
+	@echo "  make docker-up    - docker compose --profile full up -d --build (api + worker + db + redis + ui)"
+	@echo "  make worker       - run a research worker locally (needs REDIS_URL and the schema)"
 	@echo "  make docker-up-deps - docker compose up -d db redis (datastores only, for local dev)"
 	@echo "  make docker-down  - docker compose --profile full down"
 	@echo "  make eval         - run the evaluation harness (backend/evals)"
@@ -80,6 +81,9 @@ format-frontend:
 
 migrate:
 	cd $(BACKEND_DIR) && .venv/bin/python -m alembic upgrade head
+
+worker:
+	cd $(BACKEND_DIR) && .venv/bin/python -m meridian.worker
 
 docker-up:
 	docker compose --profile full up -d --build

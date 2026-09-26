@@ -74,6 +74,16 @@ class Settings(BaseSettings):
     # 503ms on one machine, so four leaves headroom; beyond that they simply queue. Raise it only
     # alongside a real worker process -- this bounds one asyncio loop, not a cluster.
     max_concurrent_runs: int = Field(default=4, ge=1, le=64)
+    # Connections the LangGraph Postgres checkpointer keeps. It writes after every graph step, so a
+    # worker running several sessions at once needs one per concurrent run plus a little slack.
+    checkpointer_pool_size: int = Field(default=8, ge=1, le=64)
+    # Where a run executes. "inprocess" keeps the API's own event loop driving it, as this build always
+    # did, and is what the CLI and the tests use. "worker" makes the API enqueue instead, so nothing
+    # heavy shares the request loop -- it needs Redis for the queue and at least one worker process.
+    run_executor: Literal["inprocess", "worker"] = "inprocess"
+    # Runs one worker process executes at once. Distinct from `max_concurrent_runs`, which is what the
+    # API will admit across the whole deployment before answering 429.
+    worker_concurrency: int = Field(default=2, ge=1, le=32)
 
     otel_exporter_otlp_endpoint: str | None = None
     langsmith_api_key: SecretStr | None = None

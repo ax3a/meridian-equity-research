@@ -76,6 +76,12 @@ RUN chmod +x /usr/local/bin/backend-entrypoint.sh \
     && mkdir -p /app/backend/.models \
     && chown -R meridian:meridian /app /home/meridian
 
+# `Settings.model_cache_dir` defaults to a path relative to the source tree, which does not exist for an
+# installed package: in the image it resolved to /opt/venv/lib/python3.12/.models, which the non-root
+# user cannot write. fastembed then failed to load and fell back to hashing embeddings -- a quieter and
+# worse failure than crashing would have been, and one that only showed up in the worker's logs.
+ENV MODEL_CACHE_DIR=/app/backend/.models
+
 USER meridian
 
 EXPOSE 8000
