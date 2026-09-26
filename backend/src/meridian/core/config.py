@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     embedding_provider: Literal["fastembed", "hashing"] = "fastembed"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dim: int = 384
+    # Chunks per embedding call. Bounds how long a single uncancellable thread step runs: per-chunk
+    # cost is flat from ~64 upwards, so larger batches buy nothing and only delay the agent timeout.
+    embedding_batch_size: int = Field(default=64, ge=1, le=512)
     model_cache_dir: Path = BACKEND_ROOT / ".models"
 
     require_approval_default: bool = True

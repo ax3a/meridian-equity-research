@@ -173,7 +173,15 @@ async def _build_dispatcher(
         return None, in_process
 
     log.info("run_executor_worker", limit=settings.max_concurrent_runs)
-    return queue, WorkerDispatcher(runner, queue, store, limit=settings.max_concurrent_runs)
+    return queue, WorkerDispatcher(
+        runner,
+        queue,
+        store,
+        limit=settings.max_concurrent_runs,
+        # An API replica that dies between reserving and releasing would otherwise hold its slot
+        # forever; a run cannot outlive this, so anything older is certainly gone.
+        slot_stale_seconds=settings.agent_timeout_seconds * 10,
+    )
 
 
 async def build_runtime(settings: Settings, *, use_database: bool = True) -> Runtime:

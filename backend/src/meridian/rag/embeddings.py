@@ -51,17 +51,30 @@ class HashingEmbedder:
 
 
 class FastEmbedProvider:
-    """Wraps `fastembed`. Construction does no I/O; the model loads lazily on the first `embed` call."""
+    """Wraps `fastembed`. Construction does no I/O; the model loads lazily on the first `embed` call.
+
+    Inference is serialised. One `TextEmbedding` wraps one ONNX Runtime session, and calling `run()` on
+    it from two threads at once deadlocks: a run that indexed two documents concurrently hung forever
+    with both threads parked inside `onnxruntime ... run` and the CPU idle. The retriever's lock is per
+    *document*, so it does not prevent that -- two agents indexing different filings is exactly the case
+    it allows. Nothing above can rescue it either, because the work sits in `asyncio.to_thread`, and a
+    thread handed to an executor cannot be cancelled, so even the agent timeout could not fire.
+
+    Serialising costs little: ONNX parallelises internally across its own thread pool, so one call at a
+    time already uses the machine.
+    """
 
     name = "fastembed"
 
-    def __init__(self, model_name: str, cache_dir: Path, dim: int = 384) -> None:
+    def __init__(self, model_name: str, cache_dir: Path, dim: int = 384, batch_size: int = 64) -> None:
         self.model_name = model_name
         self.cache_dir = Path(cache_dir)
         self.dim = dim
+        self.batch_size = max(1, batch_size)
         self._model: object | None = None
         self._fallback: HashingEmbedder | None = None
         self._lock = asyncio.Lock()
+        self._inference_lock = asyncio.Lock()
 
     def _load_model(self) -> object:
         from fastembed import TextEmbedding
@@ -82,18 +95,37 @@ class FastEmbedProvider:
                 self._fallback = HashingEmbedder(dim=self.dim)
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed in batches, awaiting between them.
+
+        A single call for every chunk of a filing measured ~100ms per chunk, so a large document was
+        minutes inside one `asyncio.to_thread` -- and a thread handed to an executor cannot be
+        cancelled, so `asyncio.timeout` around the agent could not fire and the run simply hung.
+        Batching bounds each uncancellable step to a few seconds and returns control to the event loop
+        between batches, which is what makes the agent timeout effective at all. Throughput is
+        unaffected: per-chunk cost is flat from about 64 onwards.
+        """
         await self._ensure_ready()
         if self._fallback is not None:
             return await self._fallback.embed(texts)
         model = self._model
 
-        def _run() -> list[list[float]]:
-            return [vec.tolist() for vec in model.embed(texts)]  # type: ignore[union-attr]
+        def _run(batch: list[str]) -> list[list[float]]:
+            return [vec.tolist() for vec in model.embed(batch)]  # type: ignore[union-attr]
 
-        return await asyncio.to_thread(_run)
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start : start + self.batch_size]
+            async with self._inference_lock:
+                vectors.extend(await asyncio.to_thread(_run, batch))
+        return vectors
 
 
 def build_embedder(settings: Settings) -> EmbeddingProvider:
     if settings.embedding_provider == "hashing":
         return HashingEmbedder(dim=settings.embedding_dim)
-    return FastEmbedProvider(settings.embedding_model, settings.model_cache_dir, dim=settings.embedding_dim)
+    return FastEmbedProvider(
+        settings.embedding_model,
+        settings.model_cache_dir,
+        dim=settings.embedding_dim,
+        batch_size=settings.embedding_batch_size,
+    )

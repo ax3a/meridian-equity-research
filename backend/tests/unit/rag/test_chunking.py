@@ -170,3 +170,41 @@ def test_a_trailing_sentence_larger_than_the_budget_is_not_carried() -> None:
 
     for draft in drafts:
         assert not draft.text[0].islower()
+
+
+def test_a_paragraph_continuing_the_previous_one_is_rejoined() -> None:
+    """HTML extraction breaks a sentence across paragraphs at line, cell and page boundaries.
+
+    The fragment then opened a chunk, which is both unreadable when quoted and a worse vector to embed.
+    """
+    section = DocumentSection(
+        key="1A",
+        title="Item 1A. Risk Factors",
+        text=(
+            "Our results may be affected by a number of factors, including changes in\n\n"
+            "consumer credit, higher consumer debt levels and reduced discretionary spending.\n\n"
+            "We also face competition from other retailers in every market we serve."
+        ),
+        start_offset=0,
+    )
+
+    drafts = chunk_section(section, target_tokens=400, overlap_tokens=0)
+
+    body = " ".join(d.text for d in drafts)
+    assert "including changes in consumer credit" in body, "the split sentence must be made whole again"
+    for draft in drafts:
+        assert not draft.text[0].islower()
+
+
+def test_offsets_still_point_at_the_start_of_a_rejoined_passage() -> None:
+    section = DocumentSection(
+        key="1A",
+        title="Item 1A. Risk Factors",
+        text="Opening sentence of the paragraph runs on\n\nand finishes over here in a second block.",
+        start_offset=1000,
+    )
+
+    drafts = chunk_section(section, target_tokens=400, overlap_tokens=0)
+
+    assert len(drafts) == 1
+    assert drafts[0].start_offset == 1000, "evidence must still resolve to where the passage begins"

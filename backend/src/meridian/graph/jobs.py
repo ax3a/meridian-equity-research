@@ -15,9 +15,12 @@ rather than starting over.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
+
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from meridian.core.logging import get_logger
 from meridian.schemas.research import HumanFeedback
@@ -26,10 +29,30 @@ log = get_logger(__name__)
 
 QUEUE_KEY = "meridian:runs:pending"
 CLAIM_PREFIX = "meridian:runs:claim:"
+# One member per admitted run. A sorted set scored by admission time, so entries left behind by an
+# API replica that died can be aged out instead of leaking capacity forever.
+ADMITTED_KEY = "meridian:runs:admitted"
 
 
 def _claim_key(session_id: str) -> str:
     return f"{CLAIM_PREFIX}{session_id}"
+
+
+# Prune stale entries, then admit only if the set is still under the limit. Re-adding a session that is
+# already a member is idempotent, so a retry of the same request cannot consume two slots.
+_RESERVE_SCRIPT = """
+local key, now, cutoff, limit, member = KEYS[1], ARGV[1], ARGV[2], tonumber(ARGV[3]), ARGV[4]
+redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
+if redis.call('ZSCORE', key, member) then
+  redis.call('ZADD', key, now, member)
+  return 1
+end
+if redis.call('ZCARD', key) >= limit then
+  return 0
+end
+redis.call('ZADD', key, now, member)
+return 1
+"""
 
 
 class JobKind(StrEnum):
@@ -90,7 +113,13 @@ class RunQueue:
         """Block for up to `block_seconds`. None means nothing arrived, not an error."""
         if self._client is None:
             raise RuntimeError("run queue is not connected")
-        item = await self._client.brpop([self._key], timeout=block_seconds)
+        try:
+            item = await self._client.brpop([self._key], timeout=block_seconds)
+        except RedisTimeoutError:
+            # redis-py bounds the socket read by the block time, so an idle queue can surface as a
+            # timeout instead of an empty result. Both mean "no job"; reporting it as a failure made
+            # a normal idle worker look broken in the logs.
+            return None
         if item is None:
             return None
         _, raw = item
@@ -100,6 +129,35 @@ class RunQueue:
             # A malformed job must not wedge the worker; drop it loudly and take the next one.
             log.warning("run_job_discarded", error=str(exc), raw=str(raw)[:200])
             return None
+
+    async def reserve_slot(self, session_id: str, limit: int, stale_after_seconds: float) -> bool:
+        """Atomically take one of `limit` admission slots, or return False.
+
+        Counting non-terminal runs in the store and comparing to the limit is a read, not a
+        reservation: two requests arriving together both saw the same count and both were admitted, and
+        with several API replicas each could admit the full limit on its own. This is a single Lua
+        script, so the count and the insert cannot be interleaved.
+
+        Entries older than `stale_after_seconds` are dropped first. An API replica that dies between
+        reserving and releasing would otherwise hold its slot permanently.
+        """
+        if self._client is None:
+            return True
+        now = time.time()
+        acquired = await self._client.eval(
+            _RESERVE_SCRIPT, 1, ADMITTED_KEY, str(now), str(now - stale_after_seconds), str(limit), session_id
+        )
+        return bool(acquired)
+
+    async def release_slot(self, session_id: str) -> None:
+        if self._client is not None:
+            await self._client.zrem(ADMITTED_KEY, session_id)
+
+    async def admitted_count(self) -> int:
+        if self._client is None:
+            return 0
+        count: int = await self._client.zcard(ADMITTED_KEY)
+        return count
 
     async def claim(self, session_id: str, ttl_seconds: int) -> bool:
         """Take exclusive ownership of a session, or return False if a live worker already holds it.

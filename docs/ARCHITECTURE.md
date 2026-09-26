@@ -213,9 +213,19 @@ Two things make this safe rather than merely distributed:
 
 Admission differs between the two shapes because the truth lives somewhere different. In-process, a
 counter in the API is exact. With workers, several API replicas admit against a pool of workers none of
-them owns, so capacity is read from the shared run store instead. That read is not a reservation, so the
-cap is approximate by a run or two under simultaneous requests -- deliberately traded for not having
-every replica admit the full limit independently.
+them owns, so the slot is reserved in Redis by a Lua script that prunes stale entries, counts and
+inserts as one step. Ten simultaneous requests against a cap of four admit exactly four. Slots are
+returned when a run reaches a terminal state or pauses for approval, and any left behind by a replica
+that died age out.
+
+One more constraint is worth stating because it shaped the design. Embedding runs inside
+`asyncio.to_thread`, and a thread handed to an executor cannot be cancelled -- so any single call into
+it is a stretch of time nothing above can interrupt, including the agent timeout. Embedding is
+therefore batched (64 chunks, ~5s) and serialised behind one lock: batched so the timeout has
+boundaries at which to fire, serialised because one `TextEmbedding` wraps one ONNX session and calling
+`run()` on it from two threads deadlocks. Unbatched and unserialised, a run that indexed two documents
+at once hung forever with both threads parked in onnxruntime, the CPU idle and the agent timeout
+powerless.
 
 ## Persistence and caching
 

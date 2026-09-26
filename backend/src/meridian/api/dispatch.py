@@ -14,7 +14,9 @@ local counter that would let each one admit the full limit on its own.
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from typing import Protocol
+from uuid import uuid4
 
 from meridian.api.concurrency import RunAdmission, run_and_release
 from meridian.core.logging import get_logger
@@ -23,6 +25,10 @@ from meridian.graph.runner import ResearchRunner, RunStore
 from meridian.schemas.research import HumanFeedback, ResearchRequest
 
 log = get_logger(__name__)
+
+# The admission token reserved for the request currently being handled. A ContextVar rather than an
+# attribute because several requests share one dispatcher instance and must not share this.
+_reservation: ContextVar[str | None] = ContextVar("meridian_admission_token", default=None)
 
 
 class RunDispatcher(Protocol):
@@ -83,34 +89,62 @@ class WorkerDispatcher:
 
     mode = "worker"
 
-    def __init__(self, runner: ResearchRunner, queue: RunQueue, store: RunStore, *, limit: int) -> None:
+    def __init__(
+        self,
+        runner: ResearchRunner,
+        queue: RunQueue,
+        store: RunStore,
+        *,
+        limit: int,
+        slot_stale_seconds: float,
+    ) -> None:
         self._runner = runner
         self._queue = queue
         self._store = store
         self._limit = limit
+        self._slot_stale_seconds = slot_stale_seconds
 
     @property
     def limit(self) -> int:
         return self._limit
 
     async def try_admit(self) -> bool:
-        """Admit against the shared run store, since no single process sees all the active runs.
+        """Reserve one of the shared admission slots, atomically.
 
-        This is a check, not a reservation: two requests arriving together can both read the same
-        count and both be admitted. The consequence is at most a few runs over the limit, which the
-        worker's own concurrency then queues -- far better than a per-process counter that lets every
-        API replica admit the full limit independently.
+        A counter in this process would let every API replica admit the full limit on its own, and
+        comparing a store count against the limit is a read rather than a reservation -- two requests
+        arriving together both saw the same count and were both admitted. The reservation is a single
+        Lua script in Redis, so the count and the insert cannot interleave.
+
+        Slots are released when the run reaches a terminal state, and any left behind by a replica that
+        died are aged out after `slot_stale_seconds`.
         """
         try:
-            return await self._store.count_active() < self._limit
+            token = f"pending:{uuid4().hex}"
+            if not await self._queue.reserve_slot(token, self._limit, self._slot_stale_seconds):
+                return False
+            _reservation.set(token)
+            return True
         except Exception as exc:
-            log.warning("admission_count_failed_allowing_run", error=str(exc))
+            # Refusing every run because Redis hiccuped is a worse failure than briefly exceeding the cap.
+            log.warning("admission_reservation_failed_allowing_run", error=str(exc))
             return True
 
     async def start(self, request: ResearchRequest) -> str:
         session_id = await self._runner.create(request)
+        # Re-key the reservation from the pre-admission token to the real session id, so the slot can
+        # be released when the run finishes rather than waiting to age out.
+        token = _reservation.get()
+        if token is not None:
+            await self._queue.release_slot(token)
+            await self._queue.reserve_slot(session_id, self._limit + 1, self._slot_stale_seconds)
+            _reservation.set(None)
         await self._queue.enqueue(RunJob(kind=JobKind.START, session_id=session_id))
         return session_id
+
+    async def release(self, session_id: str) -> None:
+        """Give the admission slot back once the run is no longer active."""
+        await self._queue.release_slot(session_id)
 
     async def resume(self, session_id: str, feedback: list[HumanFeedback]) -> None:
         await self._queue.enqueue(RunJob(kind=JobKind.RESUME, session_id=session_id, feedback=feedback))

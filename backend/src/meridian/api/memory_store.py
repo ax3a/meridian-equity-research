@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from meridian.core.ids import utcnow
-from meridian.schemas.enums import RECOVERABLE_RUN_STATUSES, TERMINAL_RUN_STATUSES
+from meridian.schemas.enums import TERMINAL_RUN_STATUSES
 from meridian.schemas.events import ProgressEvent
 from meridian.schemas.state import ResearchState
 
@@ -91,5 +91,6 @@ class LocalRunStore:
     async def count_active(self) -> int:
         return sum(1 for s in self._states.values() if s.status not in TERMINAL_RUN_STATUSES)
 
-    async def list_recoverable(self) -> list[str]:
-        return [sid for sid, s in self._states.items() if s.status in RECOVERABLE_RUN_STATUSES]
+    async def list_recoverable(self, *, idle_for_seconds: float) -> list[str]:
+        """Nothing to recover: this store is per-process, so a restart loses it with the process."""
+        return []

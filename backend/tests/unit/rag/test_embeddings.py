@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 from pathlib import Path
 
@@ -60,3 +61,65 @@ def test_fastembed_provider_construction_does_not_touch_network(tmp_path: Path) 
     provider = FastEmbedProvider("BAAI/bge-small-en-v1.5", tmp_path, dim=384)
     assert provider.dim == 384
     assert provider.name == "fastembed"
+
+
+class _CountingModel:
+    """Stands in for fastembed's TextEmbedding, recording batch sizes and concurrent entries."""
+
+    def __init__(self, dim: int = 384) -> None:
+        self.dim = dim
+        self.batches: list[int] = []
+        self.concurrent = 0
+        self.max_concurrent = 0
+
+    def embed(self, texts):
+        import numpy as np
+
+        self.batches.append(len(texts))
+        self.concurrent += 1
+        self.max_concurrent = max(self.max_concurrent, self.concurrent)
+        try:
+            return [np.zeros(self.dim) for _ in texts]
+        finally:
+            self.concurrent -= 1
+
+
+def _provider(model: _CountingModel, batch_size: int = 64) -> FastEmbedProvider:
+    provider = FastEmbedProvider("test-model", Path("."), dim=model.dim, batch_size=batch_size)
+    provider._model = model  # skip the real load
+    return provider
+
+
+async def test_embedding_is_split_into_bounded_batches() -> None:
+    """One call for every chunk of a filing measured minutes inside a single uncancellable thread."""
+    model = _CountingModel()
+    provider = _provider(model, batch_size=64)
+
+    vectors = await provider.embed([f"chunk {i}" for i in range(150)])
+
+    assert len(vectors) == 150, "every input must still get a vector, in order"
+    assert model.batches == [64, 64, 22]
+
+
+async def test_concurrent_callers_never_enter_the_model_together() -> None:
+    """One `TextEmbedding` wraps one ONNX session; concurrent `run()` on it deadlocked a real run.
+
+    Two agents indexing *different* documents hit exactly this: the retriever's lock is per document,
+    so it does not serialise them, and both threads parked inside onnxruntime with the CPU idle.
+    """
+    model = _CountingModel()
+    provider = _provider(model, batch_size=8)
+
+    await asyncio.gather(*(provider.embed([f"doc{d} chunk {i}" for i in range(40)]) for d in range(4)))
+
+    assert model.max_concurrent == 1, f"{model.max_concurrent} concurrent entries into the ONNX session"
+
+
+async def test_a_batch_size_below_one_is_not_allowed_to_stall_the_loop() -> None:
+    model = _CountingModel()
+    provider = _provider(model, batch_size=0)
+
+    await provider.embed(["a", "b", "c"])
+
+    assert provider.batch_size == 1
+    assert model.batches == [1, 1, 1]

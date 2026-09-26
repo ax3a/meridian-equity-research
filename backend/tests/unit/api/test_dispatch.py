@@ -7,6 +7,7 @@ would let every replica admit the full limit by itself.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from meridian.api.concurrency import RunAdmission
@@ -42,11 +43,28 @@ class _FakeRunner:
 
 
 class _FakeQueue:
-    def __init__(self) -> None:
+    """Models the Lua reservation: prune, then admit only while under the limit."""
+
+    def __init__(self, *, fail_reserve: bool = False) -> None:
         self.jobs: list[RunJob] = []
+        self.admitted: set[str] = set()
+        self._fail_reserve = fail_reserve
 
     async def enqueue(self, job: RunJob) -> None:
         self.jobs.append(job)
+
+    async def reserve_slot(self, member: str, limit: int, stale_after_seconds: float) -> bool:
+        if self._fail_reserve:
+            raise RuntimeError("redis down")
+        if member in self.admitted:
+            return True
+        if len(self.admitted) >= limit:
+            return False
+        self.admitted.add(member)
+        return True
+
+    async def release_slot(self, member: str) -> None:
+        self.admitted.discard(member)
 
 
 class _FakeStore:
@@ -75,7 +93,7 @@ async def test_in_process_dispatcher_executes_locally() -> None:
 
 async def test_worker_dispatcher_persists_then_queues_without_executing() -> None:
     runner, queue = _FakeRunner(), _FakeQueue()
-    dispatcher = WorkerDispatcher(runner, queue, _FakeStore(), limit=4)  # type: ignore[arg-type]
+    dispatcher = WorkerDispatcher(runner, queue, _FakeStore(), limit=4, slot_stale_seconds=1800)  # type: ignore[arg-type]
 
     session_id = await dispatcher.start(_request())
 
@@ -87,7 +105,7 @@ async def test_worker_dispatcher_persists_then_queues_without_executing() -> Non
 
 async def test_worker_dispatcher_queues_feedback_with_the_resume() -> None:
     runner, queue = _FakeRunner(), _FakeQueue()
-    dispatcher = WorkerDispatcher(runner, queue, _FakeStore(), limit=4)  # type: ignore[arg-type]
+    dispatcher = WorkerDispatcher(runner, queue, _FakeStore(), limit=4, slot_stale_seconds=1800)  # type: ignore[arg-type]
     feedback = [HumanFeedback(action=FeedbackAction.ADD_COMPETITOR, ticker="AMD")]
 
     await dispatcher.resume("run_abc", feedback)
@@ -101,7 +119,7 @@ async def test_worker_dispatcher_queues_feedback_with_the_resume() -> None:
 async def test_worker_cancel_is_both_recorded_and_queued() -> None:
     """The stored state must read `cancelled` immediately, and the worker must be told to stop."""
     runner, queue = _FakeRunner(), _FakeQueue()
-    dispatcher = WorkerDispatcher(runner, queue, _FakeStore(), limit=4)  # type: ignore[arg-type]
+    dispatcher = WorkerDispatcher(runner, queue, _FakeStore(), limit=4, slot_stale_seconds=1800)  # type: ignore[arg-type]
 
     await dispatcher.cancel("run_abc")
 
@@ -109,23 +127,43 @@ async def test_worker_cancel_is_both_recorded_and_queued() -> None:
     assert queue.jobs[0].kind is JobKind.CANCEL
 
 
-async def test_worker_admission_reads_the_shared_store() -> None:
-    store = _FakeStore(active=3)
-    dispatcher = WorkerDispatcher(_FakeRunner(), _FakeQueue(), store, limit=4)  # type: ignore[arg-type]
+async def test_admission_is_reserved_atomically_not_merely_counted() -> None:
+    """Counting active runs and comparing to the limit is a read, not a reservation.
+
+    Two requests arriving together both saw the same count and were both admitted, and with several API
+    replicas each could admit the whole limit on its own. The reservation is one Lua script, so the
+    count and the insert cannot interleave.
+    """
+    queue = _FakeQueue()
+    dispatcher = WorkerDispatcher(_FakeRunner(), queue, _FakeStore(), limit=2, slot_stale_seconds=1800)  # type: ignore[arg-type]
+
+    granted = await asyncio.gather(*(dispatcher.try_admit() for _ in range(10)))
+
+    assert sum(granted) == 2, f"{sum(granted)} admitted against a limit of 2"
+    assert len(queue.admitted) == 2
+
+
+async def test_a_finished_run_gives_its_slot_back() -> None:
+    queue = _FakeQueue()
+    dispatcher = WorkerDispatcher(_FakeRunner(), queue, _FakeStore(), limit=1, slot_stale_seconds=1800)  # type: ignore[arg-type]
 
     assert await dispatcher.try_admit() is True
-    store.active = 4
-    assert await dispatcher.try_admit() is False
-    assert store.calls == 2, "capacity must be read per request, not cached in this process"
+    session_id = await dispatcher.start(_request())
+    assert await dispatcher.try_admit() is False, "the cap must still hold while the run is active"
+
+    await dispatcher.release(session_id)
+
+    assert await dispatcher.try_admit() is True
 
 
-async def test_worker_admission_allows_the_run_when_the_store_is_unreachable() -> None:
-    """A database hiccup should not make the API refuse every run; that is a worse failure."""
-
-    class _BrokenStore:
-        async def count_active(self) -> int:
-            raise RuntimeError("database down")
-
-    dispatcher = WorkerDispatcher(_FakeRunner(), _FakeQueue(), _BrokenStore(), limit=1)  # type: ignore[arg-type]
+async def test_a_redis_failure_admits_rather_than_refusing_everything() -> None:
+    """Refusing every run because Redis hiccuped is a worse failure than briefly exceeding the cap."""
+    dispatcher = WorkerDispatcher(
+        _FakeRunner(),
+        _FakeQueue(fail_reserve=True),
+        _FakeStore(),
+        limit=1,
+        slot_stale_seconds=1800,
+    )  # type: ignore[arg-type]
 
     assert await dispatcher.try_admit() is True

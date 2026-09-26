@@ -88,7 +88,16 @@ def _split_paragraphs(text: str) -> list[tuple[str, int]]:
         stripped = part.strip()
         if stripped:
             local_idx = part.find(stripped)
-            result.append((stripped, cursor + local_idx))
+            # A paragraph opening lower-case is the tail of the previous one: HTML extraction inserts
+            # breaks mid-sentence at line, cell and page boundaries, and a bullet list has no sentence
+            # punctuation to recover from. Rejoining keeps the pieces together as one unit so a chunk
+            # cannot begin part-way through a thought. The offset stays that of the opening piece, so
+            # cited evidence still points at where the passage starts in the filing.
+            if result and stripped[:1].islower():
+                previous_text, previous_offset = result[-1]
+                result[-1] = (f"{previous_text} {stripped}", previous_offset)
+            else:
+                result.append((stripped, cursor + local_idx))
         cursor += len(part)
     return result
 

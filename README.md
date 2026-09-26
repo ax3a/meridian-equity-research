@@ -368,13 +368,16 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
   against the real Anthropic API** — no key was available. Prompt shapes, tool-call parsing and refusal
   handling are unverified against the real model.
 - **Admission is capped at four concurrent runs** (`MAX_CONCURRENT_RUNS`); a fifth is refused with
-  `429`, not queued. In worker mode that cap is checked against the shared run store, which is a read
-  rather than a reservation — two simultaneous requests can both be admitted, so the effective limit is
-  approximate by a run or two.
-- **A crashed worker's run is recovered on a timer, not instantly.** The dead worker's claim has to
-  expire (90s) before a sweep (every 60s) can re-queue the run, so recovery took 83s in testing. A run
-  parked at `awaiting_approval` is never auto-resumed: it is waiting for a person, and resuming it
-  would walk straight through the approval gate.
+  `429`, not queued. The cap is reserved atomically in Redis, so ten simultaneous requests admit
+  exactly four however many API replicas they hit.
+- **A crashed worker's run is recovered on a timer, not instantly.** The dead worker's claim expires
+  after 20s and a sweep runs every 20s, so recovery lands within about a minute. A run parked at
+  `awaiting_approval` is never auto-resumed: it is waiting for a person, and resuming it would walk
+  straight through the approval gate.
+- **Embedding is CPU-bound and this machine is the bottleneck.** ~80-100ms per chunk, so indexing a
+  large filing set cold takes minutes. Several cold runs at once can push an agent past
+  `AGENT_TIMEOUT_SECONDS`; it fails, is recorded as failed, and the run continues without it rather
+  than hanging. A GPU or a hosted embedding endpoint is the real answer.
 - **Single-process mode is still the default** (`RUN_EXECUTOR=inprocess`) and is what the CLI and the
   test suite exercise. Docker compose sets `worker`. Without Redis, worker mode falls back to
   in-process with a warning rather than failing to start.
@@ -387,17 +390,17 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
   `ARRAY(0x...)` strings; peer discovery falls back to ranking XBRL revenue frames when this happens.
 - GDELT enforces an informal, undocumented rate limit and no key-based alternative is wired in by default.
 - **Filing text is extracted from HTML, and extraction is imperfect.** Page-break navigation, section
-  headings and flattened tables are filtered out of quoted claims, and chunk boundaries are
-  sentence-aligned, so 0.3% of indexed chunks now open mid-sentence (it was 60.5% when the overlap
-  carried whole words instead). What survives is page headers and table captions that read like prose;
-  the cited evidence always holds the full passage.
+  headings and flattened tables are filtered out of quoted claims; chunk overlap carries whole
+  sentences, and a paragraph that opens mid-sentence is rejoined to the one before it, since HTML
+  extraction splits sentences at line, cell and page boundaries. No chunk in the current index opens
+  mid-sentence, against 60.5% before that work. What survives is page headers and table captions that
+  read like prose; the cited evidence always holds the full passage.
 - This is a reference build for one machine, not a deployed or load-tested service.
 
 ## Roadmap
 
 - Verify the generative LLM path against the real Anthropic API and tune prompts based on real model output.
-- Reserve admission atomically rather than reading the active count, so the concurrency cap is exact
-  across API replicas instead of approximate.
+- Move embedding off the CPU (GPU or a hosted endpoint); it is the throughput limit on cold indexing.
 - A keyed market-data provider (FMP/Polygon) as the default primary, with Yahoo/Stooq as fallback only.
 - Extract filing tables as structured rows rather than flattening them into text, so the figures in them
   become citable metrics instead of being filtered out of claims.

@@ -128,6 +128,6 @@ class DbRunStore:
         async with self._sessions() as session:
             return await ResearchRepository(session).count_active()
 
-    async def list_recoverable(self) -> list[str]:
+    async def list_recoverable(self, *, idle_for_seconds: float) -> list[str]:
         async with self._sessions() as session:
-            return await ResearchRepository(session).list_recoverable()
+            return await ResearchRepository(session).list_recoverable(idle_for_seconds=idle_for_seconds)

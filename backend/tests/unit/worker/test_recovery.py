@@ -15,7 +15,7 @@ from typing import Any
 
 from meridian.graph.jobs import JobKind, RunJob
 from meridian.schemas.enums import RECOVERABLE_RUN_STATUSES, TERMINAL_RUN_STATUSES, RunStatus
-from meridian.worker.service import RunWorker
+from meridian.worker.service import CLAIM_TTL_SECONDS, RunWorker
 
 
 class _FakeQueue:
@@ -45,11 +45,17 @@ class _FakeStore:
     def __init__(self, recoverable: list[str], *, fail: bool = False) -> None:
         self._recoverable = recoverable
         self._fail = fail
+        self.idle_window: float | None = None
 
-    async def list_recoverable(self) -> list[str]:
+    async def list_recoverable(self, *, idle_for_seconds: float) -> list[str]:
+        self.idle_window = idle_for_seconds
         if self._fail:
             raise RuntimeError("database down")
         return list(self._recoverable)
+
+
+class _FakeSettings:
+    agent_timeout_seconds = 300.0
 
 
 class _FakeRuntime:
@@ -58,6 +64,7 @@ class _FakeRuntime:
         self.runner = object()
         self.durable_runs = True
         self.db_available = True
+        self.settings = _FakeSettings()
 
 
 def _worker(queue: _FakeQueue, store: Any) -> RunWorker:
@@ -115,3 +122,21 @@ def test_awaiting_approval_is_not_recoverable() -> None:
     assert RunStatus.AWAITING_APPROVAL not in RECOVERABLE_RUN_STATUSES
     assert {RunStatus.QUEUED, RunStatus.RESEARCHING} == RECOVERABLE_RUN_STATUSES
     assert not (RECOVERABLE_RUN_STATUSES & TERMINAL_RUN_STATUSES)
+
+
+async def test_silence_alone_never_makes_a_run_recoverable() -> None:
+    """A claim is refreshed by a timer, so it only lapses when the worker is genuinely gone.
+
+    That was not always true: an unbatched embedding call starved the event loop for minutes, the
+    refresh never ran, and a sweep stole a run that a live worker was still driving. The idle window
+    remains as a backstop against scheduling skew.
+    """
+    store = _FakeStore(["run_a"])
+    worker = _worker(_FakeQueue(), store)
+
+    await worker.recover_orphans()
+
+    assert store.idle_window is not None
+    assert store.idle_window >= CLAIM_TTL_SECONDS * 3, (
+        "silence must outlast several claim periods before a run counts as abandoned"
+    )

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from meridian.db.models import (
     AgentRunModel,
     CriticReviewModel,
     FeedbackModel,
+    ResearchEventModel,
     ResearchSessionModel,
     ResearchTaskModel,
 )
@@ -285,15 +286,32 @@ class ResearchRepository:
             )
         )
 
-    async def list_recoverable(self) -> list[str]:
-        """Sessions that were executing when their worker stopped.
+    async def list_recoverable(self, *, idle_for_seconds: float) -> list[str]:
+        """Sessions that look abandoned: mid-flight, and silent for `idle_for_seconds`.
 
-        Only genuinely mid-flight states: `queued` and `researching`. A run parked in
+        Only genuinely mid-flight states -- `queued` and `researching`. A run parked in
         `awaiting_approval` is waiting for a person, not for a worker, and must not be resumed by one.
+
+        Silence is required as well as an absent claim. A claim is refreshed by an asyncio task, so a
+        run doing CPU-heavy work on the event loop can let its claim lapse while very much alive; with
+        several workers that produced a sweep re-queueing runs its neighbours were actively executing,
+        putting two workers on one graph thread. A run still emitting progress events is alive whatever
+        its claim says.
         """
+        last_event = (
+            select(ResearchEventModel.session_id, func.max(ResearchEventModel.at).label("last_at"))
+            .group_by(ResearchEventModel.session_id)
+            .subquery()
+        )
+        cutoff = utcnow() - timedelta(seconds=idle_for_seconds)
         stmt = (
             select(ResearchSessionModel.id)
-            .where(ResearchSessionModel.status.in_({s.value for s in RECOVERABLE_RUN_STATUSES}))
+            .outerjoin(last_event, last_event.c.session_id == ResearchSessionModel.id)
+            .where(
+                ResearchSessionModel.status.in_({s.value for s in RECOVERABLE_RUN_STATUSES}),
+                or_(last_event.c.last_at.is_(None), last_event.c.last_at < cutoff),
+                ResearchSessionModel.created_at < cutoff,
+            )
             .order_by(ResearchSessionModel.created_at)
         )
         result = await self._session.execute(stmt)

@@ -30,12 +30,26 @@ from meridian.api.wiring import Runtime, build_runtime
 from meridian.core.config import Settings, get_settings
 from meridian.core.logging import configure_logging, get_logger
 from meridian.graph.jobs import JobKind, RunJob, RunQueue
+from meridian.schemas.enums import TERMINAL_RUN_STATUSES, RunStatus
 
 log = get_logger(__name__)
 
-# How long a worker's claim on a session survives without a refresh. Long enough to ride out a slow
-# graph step, short enough that a crashed worker's runs are recoverable quickly.
-CLAIM_TTL_SECONDS = 90
+# How long a worker's claim survives without a refresh, and how often the holder refreshes it.
+#
+# The claim answers "is a worker alive?", which is a different question from "is this run progressing?"
+# -- the idle window below answers that one. Separating them lets the claim be short: refreshing every
+# 5s means a dead worker is detectable in 20s, while a *live* worker that is simply busy keeps its
+# claim, because the refresh is a tiny timer rather than anything that waits on the run.
+CLAIM_TTL_SECONDS = 20
+CLAIM_REFRESH_SECONDS = 5.0
+# A silent run must also be this old before a sweep treats it as abandoned. A backstop, not the main
+# test: the claim above answers "is a worker alive?", and it does so reliably now that no single step
+# can starve the event loop for minutes (embedding is batched, so the 5s refresh always gets to run).
+#
+# It used to have to exceed `agent_timeout_seconds`, because a starved loop let a live worker's claim
+# lapse and a sweep then stole a run mid-tool-call. With that cause fixed the window is about
+# tolerating a brief clock or scheduling skew, which three claim periods covers.
+ORPHAN_IDLE_SECONDS = CLAIM_TTL_SECONDS * 3
 
 # Touched while the worker is alive and consuming. The container healthcheck reads its mtime, because
 # the worker serves no HTTP and would otherwise inherit the API image's curl check and always fail.
@@ -46,12 +60,13 @@ HEARTBEAT_INTERVAL_SECONDS = 10.0
 class RunWorker:
     """Pops jobs and executes them, up to `worker_concurrency` at a time."""
 
-    def __init__(self, runtime: Runtime, queue: RunQueue, *, concurrency: int, sweep_seconds: float = 60.0) -> None:
+    def __init__(self, runtime: Runtime, queue: RunQueue, *, concurrency: int, sweep_seconds: float = 20.0) -> None:
         self._runtime = runtime
         self._queue = queue
         self._slots = asyncio.Semaphore(concurrency)
         self._concurrency = concurrency
         self._sweep_seconds = sweep_seconds
+        self._orphan_idle_seconds = float(ORPHAN_IDLE_SECONDS)
         self._inflight: set[asyncio.Task[None]] = set()
         self._stopping = asyncio.Event()
 
@@ -64,6 +79,7 @@ class RunWorker:
             concurrency=self._concurrency,
             durable_runs=self._runtime.durable_runs,
             db=self._runtime.db_available,
+            orphan_idle_seconds=self._orphan_idle_seconds,
         )
         self._beat()
         beater = asyncio.create_task(self._heartbeat())
@@ -95,6 +111,21 @@ class RunWorker:
         if sweeper is not None:
             sweeper.cancel()
         await self._drain()
+
+    async def _release_if_settled(self, session_id: str) -> None:
+        """Hand the admission slot back once the run is finished, or paused for a human.
+
+        Not on every job: a run that merely paused for approval is still occupying capacity in the
+        sense that matters, but a *terminal* one is not, and a run awaiting a person could sit there
+        for hours. Both release; only a run still executing keeps its slot.
+        """
+        try:
+            state = await self._runtime.store.get_state(session_id)
+            if state is None or state.status in TERMINAL_RUN_STATUSES or state.status is RunStatus.AWAITING_APPROVAL:
+                await self._queue.release_slot(session_id)
+        except Exception as exc:
+            # The slot ages out on its own, so this is a latency problem rather than a leak.
+            log.warning("admission_slot_not_released", session_id=session_id, error=str(exc))
 
     def _beat(self) -> None:
         """Record liveness. Best effort: a read-only filesystem must not stop the worker working."""
@@ -133,7 +164,7 @@ class RunWorker:
         """Keep this worker's claim alive while the run executes; stop, and it lapses for recovery."""
         try:
             while True:
-                await asyncio.sleep(CLAIM_TTL_SECONDS / 3)
+                await asyncio.sleep(CLAIM_REFRESH_SECONDS)
                 await self._queue.refresh_claim(session_id, CLAIM_TTL_SECONDS)
         except asyncio.CancelledError:
             raise
@@ -148,7 +179,7 @@ class RunWorker:
         its claim; claims lapse on their TTL, so a run being executed right now is never taken.
         """
         try:
-            orphans = await self._runtime.store.list_recoverable()
+            orphans = await self._runtime.store.list_recoverable(idle_for_seconds=self._orphan_idle_seconds)
         except Exception as exc:
             log.warning("orphan_scan_failed", error=str(exc))
             return 0
@@ -197,6 +228,7 @@ class RunWorker:
         finally:
             heartbeat.cancel()
             await self._queue.release_claim(job.session_id)
+            await self._release_if_settled(job.session_id)
             self._slots.release()
 
 
