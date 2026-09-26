@@ -56,17 +56,42 @@ query, Stooq silently switching to an anti-bot page, and others), documented in
 
 ## Screenshots
 
-*(Placeholders — capture these from a real run and drop the PNGs into `docs/images/`.)*
+All captured from real runs against live SEC EDGAR data, in offline LLM mode (no API key), running in
+Docker. Nothing here is mocked or staged.
 
-| File | What it should show |
-|---|---|
-| `docs/images/dashboard.png` | The `/` dashboard: recent runs with status chips, saved companies, system status banner (LLM mode / data mode / provider health). |
-| `docs/images/new-research.png` | `/research/new`: company search, the free-text request box, depth selector, focus-area chips, approval toggle. |
-| `docs/images/live-run.png` | `/research/[id]` mid-run: the wave-by-wave agent graph with per-agent status, the scrolling event feed, a critic verdict panel. |
-| `docs/images/review-panel.png` | The human approval panel (`awaiting_approval` state): plan, retrieved sources, preliminary findings, and the approve / deepen-valuation / add-competitor actions. |
-| `docs/images/report.png` | `/research/[id]/report`: a full section with Fact/Calculated/Interpretation badges and inline `[ev_xxx]` citation markers. |
-| `docs/images/citation-drawer.png` | The citation drawer opened from a marker: title, publisher, location, quoted text, snapshot badge. |
-| `docs/images/trace.png` | `/research/[id]/trace`: per-agent tool calls, durations and the token/cost table. |
+**The report** — every paragraph is tagged `FACT`, `CALCULATED` or `INTERPRETATION` and carries a
+citation marker. The figures come from the deterministic financial engine, not the model.
+
+![Report section with Fact/Calculated badges and citation markers](docs/images/report.png)
+
+**The citation drawer** — clicking any marker opens the exact evidence behind the claim: source,
+publisher, filing section and the quoted passage.
+
+![Citation drawer showing the evidence behind a claim](docs/images/citation-drawer.png)
+
+**A run in flight** — waves of specialist agents with per-agent status and a live event feed over SSE.
+
+![Live run view with the agent wave graph and event feed](docs/images/live-run.png)
+
+**The human approval gate** — the run pauses before the report is written so a human can inspect the
+plan, the retrieved sources and the preliminary findings, then approve or demand more work.
+
+![Approval panel with plan, sources and preliminary findings](docs/images/review-panel.png)
+
+**The trace** — per-agent tool calls, durations and token/cost accounting.
+
+![Trace view with agent runs, usage and stage timings](docs/images/trace.png)
+
+<details>
+<summary>Dashboard, request form and sources view</summary>
+
+![Dashboard listing recent runs](docs/images/dashboard.png)
+
+![New research request form](docs/images/new-research.png)
+
+![Sources view listing every retrieved document](docs/images/sources.png)
+
+</details>
 
 ## Architecture at a glance
 
@@ -305,7 +330,7 @@ Latest run: **7/7 passed**, with citation coverage, source correctness and calcu
 1.000 and zero unsupported claims in the finished reports.
 
 Those scores measure the deterministic pipeline -- retrieval, calculation, citation integrity and the
-critic''s rules -- not the quality of generated prose, because offline mode generates none. Methodology,
+critic's rules -- not the quality of generated prose, because offline mode generates none. Methodology,
 full results and honest limitations: [`docs/EVALUATION.md`](docs/EVALUATION.md); scorecards land in
 `evals/results/`.
 
@@ -332,14 +357,17 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
 - SEC's `browse-edgar` SIC Atom feed has a long-standing server bug that renders company names as literal
   `ARRAY(0x...)` strings; peer discovery falls back to ranking XBRL revenue frames when this happens.
 - GDELT enforces an informal, undocumented rate limit and no key-based alternative is wired in by default.
-- The evaluation harness and offline E2E graph test are not yet built (separate workstream).
+- **Filing text is extracted from HTML, and extraction is imperfect.** Page-break navigation, section
+  headings and flattened tables are filtered out of quoted claims, but a passage can still begin
+  mid-sentence, because chunks are cut on token boundaries rather than sentence ones. The cited evidence
+  always holds the full passage, so nothing is lost — it just does not always read cleanly.
 - This is a reference build for one machine, not a deployed or load-tested service.
 
 ## Roadmap
 
 - Verify the generative LLM path against the real Anthropic API and tune prompts based on real model output.
-- Stand up Postgres/Redis via Docker and verify the migration, pgvector search and full compose stack.
-- Land the evaluation harness and record a real scorecard in `evals/results/`.
 - Celery-based distributed runner for horizontal scale beyond the current in-process asyncio runner.
 - A keyed market-data provider (FMP/Polygon) as the default primary, with Yahoo/Stooq as fallback only.
-- Capture the screenshots listed above from a live run.
+- Sentence-aware chunk boundaries, so a quoted passage never opens mid-sentence.
+- Extract filing tables as structured rows rather than flattening them into text, so the figures in them
+  become citable metrics instead of being filtered out of claims.
