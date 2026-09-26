@@ -8,7 +8,8 @@ skipped -- never fabricated.
 from __future__ import annotations
 
 from meridian.agents.base import AgentAnswer, AgentDraft, BaseAgent
-from meridian.agents.claims import describe_claim
+from meridian.agents.claims import describe_claim, is_quotable
+from meridian.agents.retrieval import search_sections, unscoped_label
 from meridian.schemas.enums import AgentName, Confidence, FindingKind, ReportSection, RiskCategory
 from meridian.schemas.findings import Finding
 from meridian.schemas.research import ResearchTask
@@ -25,6 +26,10 @@ _FILING_RISK_QUERIES: dict[RiskCategory, str] = {
     RiskCategory.TECHNOLOGY: "technology change, cybersecurity and IP risk",
     RiskCategory.VALUATION: "stock price volatility and valuation risk",
 }
+
+# Item 1A is the risk factor disclosure; Item 7A is market risk. Nothing outside those two sections is
+# the company stating a risk, so a category label attached to text from elsewhere would overstate it.
+_RISK_SECTION_KEYS: tuple[str, ...] = ("1A", "7A")
 
 
 def _resolved_ticker(state: ResearchState) -> str | None:
@@ -91,19 +96,24 @@ class RiskAgent(BaseAgent):
                     break
 
         for category, query in _FILING_RISK_QUERIES.items():
-            inv = await self.tool(ctx, "search_filings", ticker=ticker, query=query, k=2)
-            if not inv.ok or inv.output is None or not inv.output.passages:
+            # Risk disclosure lives in Item 1A, with market risk in Item 7A. Searching the whole filing
+            # lets ordinary business prose win a category query and be quoted as a stated risk.
+            passages, scoped = await search_sections(
+                self, ctx, ticker=ticker, query=query, k=2, section_keys=_RISK_SECTION_KEYS
+            )
+            if not passages:
                 continue
-            hit = inv.output.passages[0]
+            hit = passages[0]
             text = _clip(getattr(hit, "text", ""))
             evidence_id = getattr(hit, "evidence_id", "")
-            if not text or not evidence_id:
+            if not text or not evidence_id or not is_quotable(text):
                 continue
+            label = category.value if scoped else unscoped_label(category.value)
             # Prefix with the category so the same passage matching two category queries never collides
             # as a "duplicate claim" during citation validation (which dedups on claim text alone).
             findings.append(
                 self.finding(
-                    describe_claim(category.value, text),
+                    describe_claim(label, text),
                     FindingKind.FACT,
                     ReportSection.KEY_RISKS,
                     evidence_ids=[evidence_id],

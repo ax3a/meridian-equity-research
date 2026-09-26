@@ -9,18 +9,23 @@ from __future__ import annotations
 from typing import Any
 
 from meridian.agents.base import AgentAnswer, AgentDraft, BaseAgent
-from meridian.agents.claims import describe_claim
+from meridian.agents.claims import describe_claim, is_quotable
+from meridian.agents.retrieval import search_sections, unscoped_label
 from meridian.schemas.enums import AgentName, Confidence, FindingKind, ReportSection
 from meridian.schemas.research import ResearchTask
 from meridian.schemas.state import ResearchState
 from meridian.tools.base import ToolContext
 
-# (retrieval query, short label). The query is phrased for retrieval quality; the label is what a reader
-# sees in front of the quoted passage, so it has to read like a report heading rather than a search box.
-_BUSINESS_QUERIES: tuple[tuple[str, str], ...] = (
-    ("business overview, products and services", "Products and services"),
-    ("revenue sources and geographic markets", "Revenue and markets"),
-    ("customers and competitive position", "Customers and competition"),
+# (retrieval query, short label, 10-K section keys to search). The query is phrased for retrieval
+# quality; the label is what a reader sees in front of the quoted passage, so it has to read like a
+# report heading rather than a search box. The section keys keep the label honest: searching the whole
+# filing for "products and services" once returned Walmart's litigation matters, which were then quoted
+# under that heading as a fact. Item 1 is the business description; Item 7 (MD&A) is where revenue by
+# market and competitive position are discussed.
+_BUSINESS_QUERIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("business overview, products and services", "Products and services", ("1",)),
+    ("revenue sources and geographic markets", "Revenue and markets", ("1", "7")),
+    ("customers and competitive position", "Customers and competition", ("1", "7")),
 )
 
 
@@ -100,22 +105,27 @@ class CompanyAgent(BaseAgent):
 
         topics_covered = 0
         seen_evidence: set[str] = set()
-        for query, label in _BUSINESS_QUERIES:
-            passages_inv = await self.tool(ctx, "search_filings", ticker=ticker, query=query, k=2)
-            if not passages_inv.ok or passages_inv.output is None or not passages_inv.output.passages:
+        for query, label, section_keys in _BUSINESS_QUERIES:
+            passages, scoped = await search_sections(
+                self, ctx, ticker=ticker, query=query, k=2, section_keys=section_keys
+            )
+            if not passages:
                 continue
             topics_covered += 1
-            for hit in list(passages_inv.output.passages)[:2]:
+            # Outside the business sections the topical label would assert something the passage does
+            # not support, so an unscoped result is quoted neutrally instead.
+            claim_label = label if scoped else unscoped_label(label)
+            for hit in passages[:2]:
                 text = _clip(getattr(hit, "text", ""))
                 evidence_id = getattr(hit, "evidence_id", "")
                 # Retrieval queries overlap, so the same passage can answer several topics. Quoting it
                 # once per topic pads the report with duplicates that say nothing new.
-                if not text or evidence_id in seen_evidence:
+                if not text or not is_quotable(text) or evidence_id in seen_evidence:
                     continue
                 seen_evidence.add(evidence_id)
                 findings.append(
                     self.finding(
-                        describe_claim(label, text),
+                        describe_claim(claim_label, text),
                         FindingKind.FACT,
                         ReportSection.BUSINESS_MODEL,
                         evidence_ids=[evidence_id],

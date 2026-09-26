@@ -13,6 +13,7 @@ for a given query, and can add extra peer snapshots via `add_peer_snapshot`.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
@@ -265,6 +266,15 @@ def build_statements(ticker: str) -> FinancialStatements:
     return FinancialStatements(ticker=ticker, annual=annual, quarterly=[])
 
 
+_SECTION_KEY_RE = re.compile(r"^\s*(?:part\s+[iv]+[.,]?\s+)?item\s+(\d+[A-C]?)", re.IGNORECASE)
+
+
+def _section_key_of(section_title: str) -> str:
+    """Recover the section key ("1A") from a heading ("Item 1A. Risk Factors"), as the store holds both."""
+    match = _SECTION_KEY_RE.match(section_title or "")
+    return match.group(1).upper() if match else ""
+
+
 def build_passage(text: str, section: str, *, title: str = "10-K excerpt") -> tuple[PassageHit, Source, Evidence]:
     source, evidence = make_evidence_pair(text, title=title)
     hit = PassageHit(
@@ -426,8 +436,21 @@ def build_fake_data(ticker: str = "NVDA") -> FakeData:
         "distribution partners, with concentration among a small number of large customers.",
         "Item 1. Business",
     )
-    data.filing_passages = [hit1, hit2]
-    data.section_passages = [hit1, hit2]
+    # Agents scope their searches by section, so the default corpus has to span the sections they ask
+    # for. With only Item 1 here every scoped search would miss and quietly fall back to an unscoped
+    # one, testing the degraded path instead of the real one.
+    hit3 = data.add_passage(
+        "Results of operations: revenue grew on data center demand, while gross margin expanded on a "
+        "favourable product mix and improved supply terms.",
+        "Item 7. Management's Discussion and Analysis",
+    )
+    hit4 = data.add_passage(
+        "We depend on a limited number of suppliers and any disruption in supply could materially harm our "
+        "ability to meet customer demand.",
+        "Item 1A. Risk Factors",
+    )
+    data.filing_passages = [hit1, hit2, hit3, hit4]
+    data.section_passages = [hit1, hit2, hit3, hit4]
 
     def make_event(items: list[str], description: str, filed: date) -> EightKEvent:
         source, evidence = make_evidence_pair(description, title=f"{ticker} 8-K {filed.isoformat()}")
@@ -541,6 +564,13 @@ def build_tool_registry(data: FakeData, *, fail: frozenset[str] = frozenset()) -
         query = getattr(args, "query", "")
         k = getattr(args, "k", 6)
         hits = data.search_filings_fn(query) if data.search_filings_fn is not None else hits_default
+        # The real tool filters on the chunk's section key, and agents rely on that filter to keep a
+        # topical label honest. A fake that ignored it would let every scoped search "succeed", which is
+        # precisely the case the agents need covered.
+        section_keys = getattr(args, "section_keys", None)
+        if section_keys:
+            wanted = {str(key).upper() for key in section_keys}
+            hits = [hit for hit in hits if _section_key_of(hit.section) in wanted]
         out = []
         for hit in hits[:k]:
             pair = data.passage_evidence.get(hit.evidence_id)

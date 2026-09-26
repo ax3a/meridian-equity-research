@@ -7,22 +7,42 @@ evidence id a tool actually returned.
 from __future__ import annotations
 
 from meridian.agents.base import AgentAnswer, AgentDraft, BaseAgent
-from meridian.agents.claims import describe_claim
+from meridian.agents.claims import describe_claim, is_quotable
+from meridian.agents.retrieval import search_sections, unscoped_label
 from meridian.schemas.enums import AgentName, Confidence, FindingKind, ReportSection
 from meridian.schemas.findings import Finding
 from meridian.schemas.research import ResearchTask
 from meridian.schemas.state import ResearchState
 from meridian.tools.base import ToolContext
 
-# (retrieval query, report section, short label used when quoting the passage as a claim). The query is
-# written for retrieval quality; the label is written to read well in a report sentence.
-_QUERIES: tuple[tuple[str, ReportSection, str], ...] = (
-    ("management discussion and analysis of results of operations", ReportSection.FINANCIAL_PERFORMANCE, "MD&A"),
-    ("business segments and revenue disaggregation", ReportSection.FINANCIAL_PERFORMANCE, "Segment disclosure"),
-    ("risk factors", ReportSection.KEY_RISKS, "Risk factor"),
-    ("forward-looking guidance and outlook", ReportSection.RECENT_DEVELOPMENTS, "Guidance"),
-    ("changes in accounting policies or critical estimates", ReportSection.RECENT_DEVELOPMENTS, "Accounting policy"),
-    ("material events and subsequent events", ReportSection.RECENT_DEVELOPMENTS, "Material event"),
+# (retrieval query, report section, short label used when quoting the passage as a claim, 10-K section
+# keys to search). The query is written for retrieval quality; the label is written to read well in a
+# report sentence. The section keys stop the label from asserting more than the evidence shows -- an
+# unscoped search for segment disclosure once returned a reputation risk factor, which was then quoted
+# under that heading. Outlook lives in MD&A; subsequent events live in the financial statement notes
+# (8-K material events are collected separately by `get_recent_8k_events`).
+_QUERIES: tuple[tuple[str, ReportSection, str, tuple[str, ...]], ...] = (
+    (
+        "management discussion and analysis of results of operations",
+        ReportSection.FINANCIAL_PERFORMANCE,
+        "MD&A",
+        ("7",),
+    ),
+    (
+        "business segments and revenue disaggregation",
+        ReportSection.FINANCIAL_PERFORMANCE,
+        "Segment disclosure",
+        ("7", "8"),
+    ),
+    ("risk factors", ReportSection.KEY_RISKS, "Risk factor", ("1A",)),
+    ("forward-looking guidance and outlook", ReportSection.RECENT_DEVELOPMENTS, "Guidance", ("7",)),
+    (
+        "changes in accounting policies or critical estimates",
+        ReportSection.RECENT_DEVELOPMENTS,
+        "Accounting policy",
+        ("7", "8"),
+    ),
+    ("material events and subsequent events", ReportSection.RECENT_DEVELOPMENTS, "Material event", ("8",)),
 )
 
 
@@ -67,24 +87,28 @@ class FilingsAgent(BaseAgent):
         # Scoped per section: one passage may legitimately answer queries feeding different sections,
         # but quoting it twice under one section says nothing new.
         seen_by_section: dict[ReportSection, set[str]] = {}
-        for query, section, label in _QUERIES:
+        for query, section, label, section_keys in _QUERIES:
             seen_evidence = seen_by_section.setdefault(section, set())
-            inv = await self.tool(ctx, "search_filings", ticker=ticker, query=query, k=2)
-            if not inv.ok or inv.output is None or not inv.output.passages:
+            passages, scoped = await search_sections(
+                self, ctx, ticker=ticker, query=query, k=2, section_keys=section_keys
+            )
+            if not passages:
                 continue
             queries_hit += 1
-            for hit in list(inv.output.passages)[:2]:
+            # An unscoped hit cannot be claimed to come from the section the query targeted.
+            claim_label = label if scoped else unscoped_label(label)
+            for hit in passages[:2]:
                 text = _clip(getattr(hit, "text", ""))
                 evidence_id = getattr(hit, "evidence_id", "")
                 # Queries overlap; quoting one passage under several headings pads the report.
-                if not text or evidence_id in seen_evidence:
+                if not text or not is_quotable(text) or evidence_id in seen_evidence:
                     continue
                 seen_evidence.add(evidence_id)
                 # Prefix with the topic so the same passage surfaced for two different queries never
                 # collides as a "duplicate claim" during citation validation (which dedups on claim text).
                 findings.append(
                     self.finding(
-                        describe_claim(label, text),
+                        describe_claim(claim_label, text),
                         FindingKind.FACT,
                         section,
                         evidence_ids=[evidence_id],

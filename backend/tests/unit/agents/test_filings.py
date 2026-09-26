@@ -75,3 +75,36 @@ async def test_filings_generative_path(fake_data, events, scripted_llm, settings
     f = result.output.findings[0]
     assert f.status != FindingStatus.UNVERIFIED
     assert f.evidence_ids == [cited]
+
+
+async def test_filings_risk_label_only_applied_to_risk_factor_text(fake_data, events, offline_llm, settings):
+    """ "Risk factor: ..." must mean Item 1A, not whatever best matched a search for risk factors.
+
+    A real run labelled a reputation passage a "Segment disclosure" for exactly this reason.
+    """
+    tools = build_tool_registry(fake_data)
+    deps = make_deps(settings, tools, offline_llm, events)
+    result = await FilingsAgent(deps).execute(make_task(AgentName.FILINGS), make_state(fake_data.ticker))
+
+    by_evidence = {p.evidence_id: p for p in fake_data.filing_passages}
+    for finding in result.output.findings:
+        if not finding.claim.startswith("Risk factor:"):
+            continue
+        sections = {by_evidence[eid].section for eid in finding.evidence_ids if eid in by_evidence}
+        assert sections <= {"Item 1A. Risk Factors"}, f"risk label on {sections}"
+
+
+async def test_filings_falls_back_when_no_section_matches(fake_data, events, offline_llm, settings):
+    """Section detection fails on some filings; coverage must survive, without an unearned label."""
+    only_business = [p for p in fake_data.filing_passages if p.section == "Item 1. Business"]
+    fake_data.filing_passages = only_business
+    fake_data.section_passages = only_business
+
+    tools = build_tool_registry(fake_data)
+    deps = make_deps(settings, tools, offline_llm, events)
+    result = await FilingsAgent(deps).execute(make_task(AgentName.FILINGS), make_state(fake_data.ticker))
+
+    claims = [f.claim for f in result.output.findings]
+    assert claims, "the agent should still produce findings from the unscoped fallback"
+    assert not any(c.startswith("Risk factor:") for c in claims)
+    assert any(c.startswith("Filing excerpt matching") for c in claims)

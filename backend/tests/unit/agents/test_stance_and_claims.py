@@ -7,7 +7,7 @@ claim was a raw retrieved chunk ending mid-word.
 
 from __future__ import annotations
 
-from meridian.agents.claims import clean_passage, describe_claim, summarize_passage
+from meridian.agents.claims import clean_passage, describe_claim, is_quotable, summarize_passage
 from meridian.agents.stance import bear_candidates, bull_candidates, rank_by_stance
 from meridian.schemas.enums import AgentName, Confidence, FindingKind, ReportSection
 from meridian.schemas.financials import FinancialMetrics, MetricValue
@@ -152,3 +152,72 @@ def test_summarize_passage_falls_back_to_a_word_boundary_for_one_long_sentence()
     assert result.endswith("...")
     assert len(result) <= 123
     assert not result[:-3].endswith(" ")
+
+
+def test_clean_passage_drops_a_leading_item_heading() -> None:
+    passage = "Item 1. Business General Target Corporation was incorporated in Minnesota in 1902."
+    assert clean_passage(passage) == "General Target Corporation was incorporated in Minnesota in 1902."
+
+
+def test_clean_passage_keeps_item_references_inside_a_sentence() -> None:
+    passage = "Refer to Item 1A. Risk Factors for a discussion of the risks affecting our operations."
+    assert clean_passage(passage) == passage
+
+
+def test_bare_heading_is_not_quotable() -> None:
+    # A real run published "Segment disclosure: Item 7." -- cited, accurate and worthless.
+    assert is_quotable("Item 7.") is False
+    assert is_quotable("") is False
+
+
+def test_real_disclosure_is_quotable() -> None:
+    assert is_quotable(
+        "We depend on a limited number of suppliers and any disruption in supply could materially harm us."
+    )
+
+
+def test_section_title_alone_is_not_quotable() -> None:
+    """Long enough to pass a word count, but still just a heading.
+
+    A real run published "MD&A: Management's Discussion and Analysis of Financial Condition and Results
+    of Operations." as a cited fact.
+    """
+    assert (
+        is_quotable("Management’s Discussion and Analysis of Financial Condition and Results of Operations.") is False  # noqa: RUF001 - filings use a curly apostrophe
+    )
+    assert is_quotable("Item 8. Financial Statements and Supplementary Data") is False
+
+
+def test_prose_that_opens_with_a_section_title_is_still_quotable() -> None:
+    assert is_quotable("Management’s Discussion and Analysis shows revenue grew 6% on comparable sales.")  # noqa: RUF001 - filings use a curly apostrophe
+    assert is_quotable("Financial statements were restated to correct an error in lease accounting.")
+
+
+def test_leading_table_cells_are_stripped_from_a_claim() -> None:
+    """Chunks that start inside a financial table dragged the last cells into the report.
+
+    A real run published: "Segment disclosure: 32.0 | % | | 36.4 | % 1Income tax adjustment is..."
+    """
+    passage = "32.0 | % | | 36.4 | % 1Income tax adjustment is defined as net operating profit."
+    assert clean_passage(passage) == "Income tax adjustment is defined as net operating profit."
+    assert clean_passage("1,313 | Net interest expense fell six basis points.") == (
+        "Net interest expense fell six basis points."
+    )
+
+
+def test_a_passage_that_merely_opens_with_a_figure_is_untouched() -> None:
+    for passage in (
+        "2025 revenue rose 8.2% on strong comparable sales across all segments.",
+        "$90.4B of revenue was reported for fiscal 2025.",
+    ):
+        assert clean_passage(passage) == passage
+
+
+def test_a_flattened_table_is_not_quotable() -> None:
+    """A real run published a debt-ratings table as a "Guidance" claim."""
+    table = "Debt Ratings | S&P | | Moody’s Commercial Paper | A-2 | | P-2 Senior Debt | BBB+ | | Baa1"  # noqa: RUF001
+    assert is_quotable(table) is False
+
+
+def test_prose_with_an_incidental_separator_is_still_quotable() -> None:
+    assert is_quotable("Net sales rose in fiscal 2025 | driven by comparable sales growth across segments.")

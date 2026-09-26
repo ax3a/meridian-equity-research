@@ -18,8 +18,49 @@ _SHOUTY_RUN_RE = re.compile(r"\b([A-Z]{3,})(\s+\1\b)+")
 # Filings stack section headings ("RISK RISKS We are exposed to...") — drop a leading all-caps run when
 # ordinary prose follows it, since the heading is noise once the passage is quoted as a claim.
 _LEADING_HEADING_RE = re.compile(r"^(?:[A-Z][A-Z&/'\-]{2,}[.,]?\s+){1,6}(?=[A-Z][a-z])")
+# A chunk often starts on its own section heading ("Item 1. Business General Target Corporation was
+# incorporated..."). The heading is already carried by the citation, so quoting it back adds nothing.
+_ITEM_TITLES = (
+    "business",
+    "risk factors",
+    "unresolved staff comments",
+    "cybersecurity",
+    "properties",
+    "legal proceedings",
+    "mine safety disclosures",
+    "selected financial data",
+    # Filings use a curly apostrophe about as often as a straight one.
+    r"management[’']s discussion and analysis"  # noqa: RUF001
+    r"(?:\s+of\s+financial\s+condition)?(?:\s+and\s+results\s+of\s+operations)?",
+    "quantitative and qualitative disclosures about market risk",
+    r"financial statements(?:\s+and\s+supplementary\s+data)?",
+    "controls and procedures",
+    "other information",
+)
+_LEADING_ITEM_HEADING_RE = re.compile(
+    # The en and em dashes are deliberate: filings really do write "Item 1—Business".
+    r"^item\s+\d{1,2}[A-C]?\s*[.:|—–-]?\s*(?:" + "|".join(_ITEM_TITLES) + r")?\s*[.:|—–-]?\s*",  # noqa: RUF001
+    re.IGNORECASE,
+)
+# A passage that is nothing but a section title, with or without its item number. These survive the word
+# count -- "Management's Discussion and Analysis of Financial Condition and Results of Operations." is
+# thirteen words of pure heading -- so they are rejected by shape instead.
+_HEADING_ONLY_RE = re.compile(
+    r"^(?:item\s+\d{1,2}[A-C]?\s*[.:|—–-]?\s*)?(?:" + "|".join(_ITEM_TITLES) + r")\s*[.:]?$",  # noqa: RUF001
+    re.IGNORECASE,
+)
 
 DEFAULT_MAX_CHARS = 260
+# Below this, what is left after cleaning is a heading or a stub rather than a quotable statement. A
+# real run published the claim "Segment disclosure: Item 7." -- true, cited, and entirely uninformative.
+MIN_CLAIM_WORDS = 8
+# At or above this many cell separators the passage is a flattened table, not a sentence.
+MAX_CLAIM_PIPES = 3
+# A chunk that starts inside a financial table carries its last cells into the claim ("Segment
+# disclosure: 32.0 | % | | 36.4 | % 1Income tax adjustment is defined as..."). The lookahead requires a
+# pipe before the first letter, so a passage that simply opens with a figure ("2025 revenue rose") is
+# left alone; only a genuine run of table cells is removed.
+_LEADING_TABLE_CELLS_RE = re.compile(r"^(?=[^A-Za-z]*\|)[\d\s.,()$%|+\-–—]*")  # noqa: RUF001
 
 
 def clean_passage(text: str) -> str:
@@ -27,6 +68,8 @@ def clean_passage(text: str) -> str:
     cleaned = _SECTION_PREFIX_RE.sub("", text or "")
     cleaned = _WS_RE.sub(" ", cleaned).strip()
     cleaned = _SHOUTY_RUN_RE.sub(r"\1", cleaned)
+    cleaned = _LEADING_ITEM_HEADING_RE.sub("", cleaned)
+    cleaned = _LEADING_TABLE_CELLS_RE.sub("", cleaned)
     return _LEADING_HEADING_RE.sub("", cleaned).strip()
 
 
@@ -64,6 +107,22 @@ def summarize_passage(text: str, *, max_chars: int = DEFAULT_MAX_CHARS) -> str:
 
     clipped = cleaned[:max_chars].rsplit(" ", 1)[0].rstrip(" ,;:")
     return f"{clipped}..."
+
+
+def is_quotable(passage: str) -> bool:
+    """False when a passage reduces to a section heading, a table or a stub once cleaned.
+
+    Quoting one produces a finding that is accurate and cited but says nothing, which costs a reader
+    attention and makes the evidence chain look padded.
+    """
+    body = summarize_passage(passage)
+    if _HEADING_ONLY_RE.match(body):
+        return False
+    # A whole chunk of table, flattened into one line ("Debt Ratings | S&P | | Moody's | A-2 | | P-2").
+    # Prose does not carry this many cell separators, and the figures are already available as metrics.
+    if body.count("|") >= MAX_CLAIM_PIPES:
+        return False
+    return len(body.split()) >= MIN_CLAIM_WORDS
 
 
 def describe_claim(label: str, passage: str, *, max_chars: int = DEFAULT_MAX_CHARS) -> str:

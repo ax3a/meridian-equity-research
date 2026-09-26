@@ -120,3 +120,42 @@ async def test_company_generative_strips_fabricated_evidence_id(fake_data, event
     assert f.evidence_ids == []
     assert f.status == FindingStatus.UNVERIFIED
     assert result.validation.problems > 0
+
+
+async def test_company_does_not_label_out_of_section_text_as_business_description(
+    fake_data, events, offline_llm, settings
+):
+    """A passage retrieved outside Item 1/7 must not be quoted as "Products and services".
+
+    A real run searched the whole filing for products and services, got Walmart's litigation matters,
+    and published them under that heading as a fact.
+    """
+    litigation = fake_data.add_passage(
+        "The Money Transfer Agent Services Matter, the Driver Platform Matters and the Mexico Antitrust "
+        "Matter could result in liabilities, losses, expenses and costs that the company may incur.",
+        "Item 3. Legal Proceedings",
+    )
+    fake_data.filing_passages = [litigation]
+    fake_data.section_passages = [litigation]
+
+    tools = build_tool_registry(fake_data)
+    deps = make_deps(settings, tools, offline_llm, events)
+    result = await CompanyAgent(deps).execute(make_task(AgentName.COMPANY), make_state(fake_data.ticker))
+
+    claims = [f.claim for f in result.output.findings]
+    litigation_claims = [c for c in claims if "Money Transfer Agent" in c]
+    assert litigation_claims, "the passage should still be usable, just not mislabelled"
+    for claim in litigation_claims:
+        assert not claim.startswith("Products and services:")
+        assert claim.startswith("Filing excerpt matching")
+
+
+async def test_company_labels_business_section_text_topically(fake_data, events, offline_llm, settings):
+    """When the passage really does come from Item 1, the topical label is earned."""
+    tools = build_tool_registry(fake_data)
+    deps = make_deps(settings, tools, offline_llm, events)
+    result = await CompanyAgent(deps).execute(make_task(AgentName.COMPANY), make_state(fake_data.ticker))
+
+    claims = [f.claim for f in result.output.findings]
+    assert any(c.startswith("Products and services:") for c in claims)
+    assert not any(c.startswith("Filing excerpt matching") for c in claims)
