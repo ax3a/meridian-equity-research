@@ -66,3 +66,57 @@ def _enforce_strict_objects(node: Any) -> None:
     elif isinstance(node, list):
         for value in node:
             _enforce_strict_objects(value)
+
+
+# The keywords a restricted endpoint is documented to accept. Gemini's function declarations take an
+# OpenAPI 3.0 subset, and anything outside it is rejected with a bare "Request contains an invalid
+# argument" that names no field -- so the only workable approach is to send nothing it did not ask for.
+# `minItems`/`maxItems` are absent deliberately: Gemini documents them, and rejects them. A
+# `maxItems: 40` on one array was half of what made a real agent schema fail, and the error named
+# nothing. They only ever bounded output length as a hint, so dropping them costs nothing.
+_PORTABLE_SCHEMA_KEYS = frozenset(
+    {"type", "format", "description", "nullable", "enum", "items", "properties", "required"}
+)
+
+
+def portable_schema(node: Any) -> Any:
+    """Reduce a JSON schema to the subset every OpenAI-compatible endpoint accepts.
+
+    Anthropic tolerates a full JSON Schema, so this is a no-op there in practice. Gemini does not: a
+    `DraftFinding` carrying `additionalProperties`, `title`, `default` and `maxLength` was rejected
+    outright, with an error naming none of them, which cost a bisect to find.
+
+    `anyOf: [X, null]` -- what `Optional[...]` compiles to -- becomes `X` with `nullable: true`, since
+    the subset expresses optionality that way rather than as a union.
+    """
+    if isinstance(node, list):
+        return [portable_schema(v) for v in node]
+    if not isinstance(node, dict):
+        return node
+
+    if "anyOf" in node:
+        options = [o for o in node["anyOf"] if isinstance(o, dict) and o.get("type") != "null"]
+        nullable = len(options) != len(node["anyOf"])
+        chosen = dict(options[0]) if options else {"type": "string"}
+        for key, value in node.items():
+            if key != "anyOf":
+                chosen.setdefault(key, value)
+        result = portable_schema(chosen)
+        if nullable and isinstance(result, dict):
+            result["nullable"] = True
+        return result
+
+    cleaned: dict[str, Any] = {}
+    for key, value in node.items():
+        if key not in _PORTABLE_SCHEMA_KEYS:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            # A map of field names to schemas: recurse into the values, never filter the names --
+            # filtering them here silently emptied every object of its fields.
+            cleaned[key] = {name: portable_schema(sub) for name, sub in value.items()}
+        else:
+            cleaned[key] = portable_schema(value)
+    # An object with no properties left is meaningless to a validator; give it a permissive shape.
+    if cleaned.get("type") == "object" and not cleaned.get("properties"):
+        cleaned.pop("required", None)
+    return cleaned

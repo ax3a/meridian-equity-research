@@ -367,14 +367,17 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
 
 ## Limitations
 
-- **The Anthropic client has never run against the live API** — no key was available. The generative
-  path itself is no longer untested: `OpenAICompatLLMProvider` is exercised by a full research run
-  against a real HTTP endpoint, which covers the prompts, schemas, tool loops and every agent's
-  generative branch. What stays unverified is Anthropic-specific: the beta fallback header, refusal
-  `stop_reason` handling and `output_config`. Use `LLM_BASE_URL` to run generative mode without it.
-- **No model has yet judged the prose.** The end-to-end generative coverage uses a server that returns
-  schema-valid answers, which proves the machinery runs — not that a real model writes good analysis or
-  follows the citation rules under pressure.
+- **The Anthropic client has never run against the live API** — no key was available. Generative mode
+  itself is verified: a full research run completed against Google Gemini, 29 model calls, zero HTTP
+  errors, a 12-section report with resolvable citations. What stays unverified is Anthropic-specific:
+  the beta fallback header, refusal `stop_reason` handling and `output_config`.
+- **A real model does not always cite the way it is told to.** In that Gemini run, 10 of 36 citation
+  markers referenced a *finding* id rather than an *evidence* id. The validator caught every one and
+  recorded them as unverified rather than presenting them as sourced — which is the behaviour that
+  matters — but it is a prompt-quality gap that only a live model revealed.
+- **Free tiers meter aggressively.** `gemini-flash-latest` exhausted its quota within one run;
+  `gemini-flash-lite-latest` has a workable one. `LLM_REQUESTS_PER_MINUTE` paces the calls, which makes
+  a run take minutes rather than seconds. That is the cost of running generative mode for free.
 - **Admission is capped at four concurrent runs** (`MAX_CONCURRENT_RUNS`); a fifth is refused with
   `429`, not queued. The cap is reserved atomically in Redis, so ten simultaneous requests admit
   exactly four however many API replicas they hit.

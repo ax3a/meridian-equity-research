@@ -17,7 +17,7 @@ from meridian.core.config import Settings
 from meridian.providers.llm.base import ChatMessage, LLMRequest, ToolSpec
 from meridian.providers.llm.openai_compat import OpenAICompatLLMProvider
 from meridian.schemas.enums import AgentName
-from tests.integration.llm.fake_openai_server import _completion, running_server
+from tests.integration.llm.fake_openai_server import _completion, running_server, tool_call
 
 
 class _Answer(BaseModel):
@@ -81,7 +81,12 @@ async def test_a_plain_completion_round_trips() -> None:
 
 
 async def test_structured_output_is_requested_as_a_forced_tool() -> None:
-    """`response_format` support varies across these endpoints; forced function calling does not."""
+    """`response_format` support varies across these endpoints; forced function calling does not.
+
+    The force is `tool_choice: "required"`, not the object form naming the function. Both are valid
+    OpenAI, but Gemini rejects the object form with a bare "Request contains an invalid argument" --
+    and with a single tool on offer the two say the same thing.
+    """
     async with running_server() as fake:
         provider = OpenAICompatLLMProvider(_settings(fake.base_url))
         try:
@@ -90,7 +95,7 @@ async def test_structured_output_is_requested_as_a_forced_tool() -> None:
             await provider.aclose()
 
     sent = fake.last_request()
-    assert sent["tool_choice"] == {"type": "function", "function": {"name": "submit_answer"}}
+    assert sent["tool_choice"] == "required"
     schema = next(t for t in sent["tools"] if t["function"]["name"] == "submit_answer")["function"]["parameters"]
     assert "$ref" not in json.dumps(schema), "refs must be inlined; several endpoints reject them"
     assert response.structured == {"summary": "ok", "findings": []}
@@ -231,3 +236,82 @@ async def test_a_key_is_sent_as_a_bearer_token() -> None:
         assert provider._client.headers["Authorization"] == "Bearer secret-key"
     finally:
         await provider.aclose()
+
+
+async def test_several_tools_are_offered_rather_than_forced() -> None:
+    """There is no portable way to force one specific tool, so the model is asked.
+
+    The caller loops and validates, so a prose reply costs a turn instead of the run.
+    """
+    async with running_server() as fake:
+        provider = OpenAICompatLLMProvider(_settings(fake.base_url))
+        try:
+            await provider.complete(
+                _request(
+                    tools=[ToolSpec(name="get_profile", description="d", input_schema={"type": "object"})],
+                    output_schema=_Answer,
+                    force_output=True,
+                )
+            )
+        finally:
+            await provider.aclose()
+
+    assert fake.last_request()["tool_choice"] == "auto"
+
+
+async def test_schemas_are_reduced_to_the_portable_subset() -> None:
+    """Keywords outside the subset are rejected outright by some endpoints, naming nothing.
+
+    `maxItems` on one array was half of what made a real agent schema fail against Gemini.
+    """
+    async with running_server() as fake:
+        provider = OpenAICompatLLMProvider(_settings(fake.base_url))
+        try:
+            await provider.complete(_request(output_schema=_Answer, force_output=True))
+        finally:
+            await provider.aclose()
+
+    schema = json.dumps(fake.last_request()["tools"][0]["function"]["parameters"])
+    for keyword in ("additionalProperties", "maxItems", "minItems", "title", "default", "$ref", "anyOf"):
+        assert keyword not in schema, f"{keyword} must not reach a restricted endpoint"
+
+
+async def test_vendor_extras_on_a_tool_call_are_carried_back_verbatim() -> None:
+    """Some endpoints attach opaque state to a tool call and reject the next turn without it.
+
+    Gemini returns a `thought_signature` under `extra_content` and answers the follow-up with
+    "Function call is missing a thought_signature in functionCall parts". Dropping it meant every
+    tool-using agent failed on its second turn -- which is every tool-using agent.
+    """
+    signature = {"google": {"thought_signature": "opaque-blob"}}
+
+    def with_signature(payload):
+        call = tool_call("call_sig", "get_profile", {"ticker": "TST"})
+        call["extra_content"] = signature
+        return _completion(tool_calls=[call], finish_reason="tool_calls")
+
+    async with running_server(with_signature) as fake:
+        provider = OpenAICompatLLMProvider(_settings(fake.base_url))
+        spec = ToolSpec(name="get_profile", description="d", input_schema={"type": "object"})
+        try:
+            first = await provider.complete(_request(tools=[spec]))
+            # Exactly what an agent does next: replay the assistant turn, then the tool's result.
+            await provider.complete(
+                _request(
+                    tools=[spec],
+                    messages=[
+                        ChatMessage(role="user", content="Analyse TST"),
+                        ChatMessage(role="assistant", content=first.raw_content),
+                        ChatMessage(
+                            role="user",
+                            content=[{"type": "tool_result", "tool_use_id": "call_sig", "content": "data"}],
+                        ),
+                    ],
+                )
+            )
+        finally:
+            await provider.aclose()
+
+    assert first.raw_content[0]["extra_content"] == signature, "the extra must survive into the state"
+    replayed = fake.last_request()["messages"][2]
+    assert replayed["tool_calls"][0]["extra_content"] == signature, "and must be sent back unchanged"

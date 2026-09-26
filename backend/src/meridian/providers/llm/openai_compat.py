@@ -21,6 +21,7 @@ Two translations do the real work, because this system's `LLMRequest` is shaped 
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
@@ -33,13 +34,24 @@ from meridian.core.errors import ProviderUnavailableError
 from meridian.core.logging import get_logger
 from meridian.providers.llm.base import LLMRequest, LLMResponse, LLMToolCall
 from meridian.providers.llm.pricing import estimate_cost
-from meridian.providers.llm.schema_tools import inline_json_schema, inline_schema_dict
+from meridian.providers.llm.schema_tools import inline_json_schema, inline_schema_dict, portable_schema
 from meridian.schemas.telemetry import LLMUsage
 
 log = get_logger(__name__)
 
 OUTPUT_TOOL_NAME = "submit_answer"
 _RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """The endpoint's own instruction on how long to wait, when it gives one."""
+    raw = response.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return None
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -67,6 +79,10 @@ class OpenAICompatLLMProvider:
         self._client = client or httpx.AsyncClient(
             headers=headers, timeout=httpx.Timeout(settings.llm_timeout_seconds, connect=10.0)
         )
+        self._slots = asyncio.Semaphore(settings.llm_max_concurrency)
+        self._min_interval = 60.0 / settings.llm_requests_per_minute if settings.llm_requests_per_minute else 0.0
+        self._pace_lock = asyncio.Lock()
+        self._next_allowed = 0.0
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -75,9 +91,23 @@ class OpenAICompatLLMProvider:
         model = self.settings.model_for(request.tier)
         payload = self._build_payload(request, model)
         started = time.perf_counter()
-        data = await self._post_with_retry(payload)
+        async with self._slots:
+            await self._pace()
+            data = await self._post_with_retry(payload)
         latency_ms = int((time.perf_counter() - started) * 1000)
         return self._to_llm_response(request, model, data, latency_ms)
+
+    async def _pace(self) -> None:
+        """Space request starts so a burst cannot outrun a per-minute quota."""
+        if self._min_interval <= 0:
+            return
+        async with self._pace_lock:
+            now = time.monotonic()
+            wait = self._next_allowed - now
+            if wait > 0:
+                await asyncio.sleep(wait)
+                now = time.monotonic()
+            self._next_allowed = now + self._min_interval
 
     # ---- request building --------------------------------------------------------------------
 
@@ -98,7 +128,7 @@ class OpenAICompatLLMProvider:
                 "function": {
                     "name": spec.name,
                     "description": spec.description,
-                    "parameters": inline_schema_dict(spec.input_schema),
+                    "parameters": portable_schema(inline_schema_dict(spec.input_schema)),
                 },
             }
             for spec in request.tools
@@ -111,18 +141,24 @@ class OpenAICompatLLMProvider:
                     "function": {
                         "name": OUTPUT_TOOL_NAME,
                         "description": "Return the final answer in the required structure.",
-                        "parameters": inline_json_schema(request.output_schema),
+                        "parameters": portable_schema(inline_json_schema(request.output_schema)),
                     },
                 }
             )
 
         if tools:
             payload["tools"] = tools
-            if request.force_output or not request.tools:
-                # Force the answer tool: without it a model may reply in prose and the caller, which
-                # expects `structured`, would treat a perfectly good response as a failure.
-                payload["tool_choice"] = {"type": "function", "function": {"name": OUTPUT_TOOL_NAME}}
+            force = request.force_output or not request.tools
+            only_answer = force and len(tools) == 1
+            if only_answer:
+                # "required" rather than naming the function: the object form
+                # `{"type": "function", "function": {...}}` is valid OpenAI and rejected by Gemini, and
+                # with a single tool on offer the two mean the same thing.
+                payload["tool_choice"] = "required"
             else:
+                # With several tools available there is no portable way to force one, so the model is
+                # asked rather than made to -- the caller loops and validates, so a prose reply costs a
+                # turn rather than the run.
                 payload["tool_choice"] = "auto"
         return payload
 
@@ -136,6 +172,13 @@ class OpenAICompatLLMProvider:
         ):
             with attempt:
                 response = await self._client.post(self._url, json=payload)
+                if response.status_code == 429:
+                    # A per-minute quota needs a wait measured in tens of seconds; the exponential
+                    # backoff below tops out around four, which never clears one. Honour Retry-After
+                    # when the endpoint sends it, and otherwise wait out the rest of the window.
+                    delay = _retry_after_seconds(response) or self.settings.llm_rate_limit_backoff_seconds
+                    log.warning("llm_rate_limited", url=self._url, sleeping_seconds=delay)
+                    await asyncio.sleep(delay)
                 if response.status_code >= 400:
                     # Endpoints differ in how they report a bad request, and the body is where the
                     # useful part is -- surface it rather than a bare status code.
@@ -165,7 +208,14 @@ class OpenAICompatLLMProvider:
                 continue
             call_id = raw.get("id") or f"call_{len(tool_calls)}"
             tool_calls.append(LLMToolCall(id=call_id, name=name, arguments=arguments))
-            raw_blocks.append({"type": "tool_use", "id": call_id, "name": name, "input": arguments})
+            block: dict[str, Any] = {"type": "tool_use", "id": call_id, "name": name, "input": arguments}
+            # Carried back verbatim on the next turn, never interpreted. Gemini returns a
+            # `thought_signature` here and *rejects* the follow-up request if it does not come back:
+            # "Function call is missing a thought_signature in functionCall parts". Dropping it meant
+            # every tool-using agent failed on its second turn, which is every tool-using agent.
+            if raw.get("extra_content"):
+                block["extra_content"] = raw["extra_content"]
+            raw_blocks.append(block)
 
         text = message.get("content") or None
         if text:
@@ -223,16 +273,17 @@ def _translate_message(message: Any) -> list[dict[str, Any]]:
         if kind == "text":
             text_parts.append(block.get("text", ""))
         elif kind == "tool_use":
-            tool_calls.append(
-                {
-                    "id": block.get("id", ""),
-                    "type": "function",
-                    "function": {
-                        "name": block.get("name", ""),
-                        "arguments": json.dumps(block.get("input") or {}),
-                    },
-                }
-            )
+            call: dict[str, Any] = {
+                "id": block.get("id", ""),
+                "type": "function",
+                "function": {
+                    "name": block.get("name", ""),
+                    "arguments": json.dumps(block.get("input") or {}),
+                },
+            }
+            if block.get("extra_content"):
+                call["extra_content"] = block["extra_content"]
+            tool_calls.append(call)
         elif kind == "tool_result":
             tool_results.append(
                 {

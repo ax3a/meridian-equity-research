@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     # what selects that provider; no key is required, since a local server does not need one.
     llm_base_url: str | None = None
     llm_api_key: SecretStr | None = None
+    # Free tiers meter by requests-per-minute, and a research run is a burst: waves dispatch several
+    # agents at once and each makes several calls. Left unpaced, a run trips the quota and dies partway
+    # through. 0 disables pacing, for a paid endpoint that does not need it.
+    llm_requests_per_minute: int = Field(default=0, ge=0, le=10_000)
+    # Simultaneous in-flight calls. Even under a generous quota, a burst of parallel agents is what
+    # actually triggers a 429; holding the line here is cheaper than retrying after the fact.
+    llm_max_concurrency: int = Field(default=4, ge=1, le=64)
+    # How long to wait out a 429 when the endpoint sends no Retry-After. Quotas here are per minute,
+    # so this has to be tens of seconds: the ordinary exponential backoff tops out near four and would
+    # just burn the retry budget against a window that has not moved.
+    llm_rate_limit_backoff_seconds: float = Field(default=20.0, ge=0.0, le=300.0)
     anthropic_api_key: SecretStr | None = None
     model_planner: str = "claude-opus-5"
     model_worker: str = "claude-sonnet-5"

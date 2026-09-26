@@ -8,11 +8,23 @@ from pathlib import Path
 
 import pytest
 
+
+# Tests must not read the developer's .env: whatever is configured locally would silently change what
+# they assert. Adding a real LLM_BASE_URL and key to .env made two provider tests fail for no reason
+# other than that the file now had values in it.
+def _detach_settings_from_env_file() -> None:
+    from meridian.core.config import Settings
+
+    Settings.model_config["env_file"] = None
+
+
 os.environ.setdefault("ENV", "test")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault("LLM_PROVIDER", "offline")
 os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("EMBEDDING_PROVIDER", "hashing")
+
+_detach_settings_from_env_file()
 
 
 @pytest.fixture
