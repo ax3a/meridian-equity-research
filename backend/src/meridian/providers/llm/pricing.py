@@ -20,11 +20,17 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Estimate the USD cost of a completion. Returns 0.0 for a model not in `MODEL_PRICING`."""
+def estimate_cost(model: str, input_tokens: int, output_tokens: int, *, warn_unknown: bool = True) -> float:
+    """Estimate the USD cost of a completion. Returns 0.0 for a model not in `MODEL_PRICING`.
+
+    `warn_unknown=False` for OpenAI-compatible endpoints: their models are not in this table by
+    design -- pricing varies per vendor and several are free -- so a warning on every call would be
+    noise rather than news, and 0.0 is the honest figure for a free tier.
+    """
     pricing = MODEL_PRICING.get(model)
     if pricing is None:
-        log.warning("unknown_model_pricing", model=model)
+        if warn_unknown:
+            log.warning("unknown_model_pricing", model=model)
         return 0.0
     input_price, output_price = pricing
     return (input_tokens / 1_000_000) * input_price + (output_tokens / 1_000_000) * output_price

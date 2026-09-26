@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from meridian.schemas.enums import LlmMode
+
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 REPO_ROOT = BACKEND_ROOT.parent
 
@@ -34,7 +36,12 @@ class Settings(BaseSettings):
     redis_url: str | None = "redis://localhost:6379/0"
 
     # LLM: "auto" uses Anthropic when a key is present, otherwise the deterministic offline mode.
-    llm_provider: Literal["auto", "anthropic", "offline"] = "auto"
+    llm_provider: Literal["auto", "anthropic", "openai_compat", "offline"] = "auto"
+    # Any OpenAI-compatible /chat/completions endpoint: Groq, Cerebras, Mistral, OpenRouter, GitHub
+    # Models, Together, Google's Gemini compatibility layer, or a local Ollama/vLLM. Setting this is
+    # what selects that provider; no key is required, since a local server does not need one.
+    llm_base_url: str | None = None
+    llm_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     model_planner: str = "claude-opus-5"
     model_worker: str = "claude-sonnet-5"
@@ -130,10 +137,17 @@ class Settings(BaseSettings):
         return v
 
     @property
-    def llm_mode(self) -> Literal["anthropic", "offline"]:
-        if self.llm_provider == "auto":
-            return "anthropic" if self.anthropic_api_key else "offline"
-        return self.llm_provider
+    def llm_mode(self) -> LlmMode:
+        """Which LLM backend is in force.
+
+        On "auto" an explicit `LLM_BASE_URL` wins over an Anthropic key, because configuring one is a
+        deliberate act and silently preferring the paid vendor would be surprising.
+        """
+        if self.llm_provider != "auto":
+            return self.llm_provider
+        if self.llm_base_url:
+            return "openai_compat"
+        return "anthropic" if self.anthropic_api_key else "offline"
 
     def model_for(self, tier: LLMTier) -> str:
         return {

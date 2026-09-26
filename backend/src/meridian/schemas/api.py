@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from meridian.schemas.analysis import CriticReview
 from meridian.schemas.citations import Evidence, Source
-from meridian.schemas.enums import AgentName, RunStatus, TaskStatus
+from meridian.schemas.enums import AgentName, LlmMode, RunStatus, TaskStatus
 from meridian.schemas.findings import Finding
 from meridian.schemas.research import CompanyIdentity, HumanFeedback, ResearchPlan, ResearchRequest
 from meridian.schemas.state import ApprovalState
@@ -160,7 +160,7 @@ class ProviderStatus(BaseModel):
 
 class SystemStatus(BaseModel):
     version: str
-    llm_mode: Literal["anthropic", "offline"]
+    llm_mode: LlmMode
     data_mode: str
     database: bool
     redis: bool

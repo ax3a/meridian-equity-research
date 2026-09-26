@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 
 class AgentName(StrEnum):
@@ -91,6 +92,11 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+
+# Declared once and imported everywhere. It was spelled out separately in the settings, the API
+# schema and the report schema, so adding a third backend broke a run at the point the report was
+# built -- after every agent had already done its work.
+LlmMode = Literal["anthropic", "openai_compat", "offline"]
 
 TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
 # States a worker can pick a run back up from. AWAITING_APPROVAL is deliberately absent: that run

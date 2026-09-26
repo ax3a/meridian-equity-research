@@ -31,10 +31,13 @@ sentences and checks them against a metrics table with the same precision they w
 This is a from-scratch build, verified end to end in **offline deterministic mode**. Read this before
 anything else:
 
-- **No Anthropic API key was available during development.** The generative LLM path (Claude-driven
-  planning, tool-use research loops, critic judgement, report prose) is fully implemented and covered by
-  unit tests using a scripted fake LLM client, but it has **never been exercised against the real Anthropic
-  API**. Whether the prompts, tool schemas and retry logic hold up against the live model is unverified.
+- **Generative mode works with any OpenAI-compatible endpoint**, not just Anthropic: set `LLM_BASE_URL`
+  and it runs against Google Gemini, Groq, Cerebras, Mistral, OpenRouter, GitHub Models — or a local
+  Ollama, with no key and no network. A full 13-agent generative run is covered end to end against a
+  real HTTP server speaking the protocol, so the request shapes, the Anthropic-to-OpenAI message
+  translation and the tool loops are verified rather than assumed. **The Anthropic client specifically
+  has still never run against the live API** — no key was available — so its vendor-specific pieces
+  (beta fallback headers, refusal handling, `output_config`) remain unverified.
 - **Postgres and the Docker stack are verified.** Both images build, all four containers come up healthy,
   the Alembic migration runs on container start, and a full research run completes in the containerised
   stack with results persisted (a Microsoft run: 60s, 13 sections, 933 sources, 11,553 evidence records).
@@ -364,9 +367,14 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
 
 ## Limitations
 
-- The generative LLM path has unit-test coverage against a scripted fake client but **has never been run
-  against the real Anthropic API** — no key was available. Prompt shapes, tool-call parsing and refusal
-  handling are unverified against the real model.
+- **The Anthropic client has never run against the live API** — no key was available. The generative
+  path itself is no longer untested: `OpenAICompatLLMProvider` is exercised by a full research run
+  against a real HTTP endpoint, which covers the prompts, schemas, tool loops and every agent's
+  generative branch. What stays unverified is Anthropic-specific: the beta fallback header, refusal
+  `stop_reason` handling and `output_config`. Use `LLM_BASE_URL` to run generative mode without it.
+- **No model has yet judged the prose.** The end-to-end generative coverage uses a server that returns
+  schema-valid answers, which proves the machinery runs — not that a real model writes good analysis or
+  follows the citation rules under pressure.
 - **Admission is capped at four concurrent runs** (`MAX_CONCURRENT_RUNS`); a fifth is refused with
   `429`, not queued. The cap is reserved atomically in Redis, so ten simultaneous requests admit
   exactly four however many API replicas they hit.
@@ -399,7 +407,8 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
 
 ## Roadmap
 
-- Verify the generative LLM path against the real Anthropic API and tune prompts based on real model output.
+- Run generative mode against a real model (free Gemini/Groq tier or local Ollama) and tune the prompts
+  on what it actually produces, rather than on what a schema-valid stand-in returns.
 - Move embedding off the CPU (GPU or a hosted endpoint); it is the throughput limit on cold indexing.
 - A keyed market-data provider (FMP/Polygon) as the default primary, with Yahoo/Stooq as fallback only.
 - Extract filing tables as structured rows rather than flattening them into text, so the figures in them

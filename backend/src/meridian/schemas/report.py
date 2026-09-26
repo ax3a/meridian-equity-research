@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from meridian.schemas.analysis import PeerComparison, ValuationResult
 from meridian.schemas.citations import Citation
-from meridian.schemas.enums import FindingKind, ReportSection
+from meridian.schemas.enums import FindingKind, LlmMode, ReportSection
 from meridian.schemas.research import CompanyIdentity
 
 DISCLAIMER = (
@@ -63,7 +62,7 @@ class ResearchReport(BaseModel):
     company: CompanyIdentity
     title: str
     generated_at: datetime
-    llm_mode: Literal["anthropic", "offline"]
+    llm_mode: LlmMode
     data_mode: str
     uses_snapshot_data: bool = False
     sections: list[ReportSectionContent]

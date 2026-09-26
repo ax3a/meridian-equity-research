@@ -29,6 +29,7 @@ from meridian.providers.chain import FundamentalsChain, MacroChain, MarketChain,
 from meridian.providers.llm.anthropic_provider import AnthropicLLMProvider
 from meridian.providers.llm.base import LLMProvider
 from meridian.providers.llm.offline import OfflineLLMProvider
+from meridian.providers.llm.openai_compat import OpenAICompatLLMProvider
 from meridian.providers.macro.treasury import TreasuryMacroProvider
 from meridian.providers.market.stooq import StooqMarketProvider
 from meridian.providers.market.yahoo import YahooMarketProvider
@@ -60,9 +61,11 @@ def _secret(value: SecretStr | None) -> str | None:
 
 
 def build_llm(settings: Settings) -> LLMProvider:
-    """Anthropic when `settings.llm_mode == "anthropic"` (a key is configured), else the offline mode."""
+    """The backend `settings.llm_mode` selects, falling back to deterministic offline mode."""
     if settings.llm_mode == "anthropic":
         return AnthropicLLMProvider(settings)
+    if settings.llm_mode == "openai_compat":
+        return OpenAICompatLLMProvider(settings)
     return OfflineLLMProvider()
 
 

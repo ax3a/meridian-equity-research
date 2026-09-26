@@ -593,7 +593,7 @@ export interface MetricRow {
   formula: string;
 }
 
-export type LlmMode = "anthropic" | "offline";
+export type LlmMode = "anthropic" | "openai_compat" | "offline";
 
 export interface ResearchReport {
   id: string;
@@ -838,7 +838,7 @@ export interface ProviderStatus {
 
 export interface SystemStatus {
   version: string;
-  llm_mode: "anthropic" | "offline";
+  llm_mode: LlmMode;
   data_mode: string;
   database: boolean;
   redis: boolean;
