@@ -67,7 +67,14 @@ export function TraceContent({ sessionId }: { sessionId: string }) {
         <Card>
           <SectionHeading>Usage & cost</SectionHeading>
           {trace.usage.length === 0 ? (
-            <EmptyState title="No usage recorded yet" />
+            <EmptyState
+              title="No token usage recorded"
+              description={
+                detail?.llm_mode === "offline"
+                  ? "This run used the deterministic offline model, which calls no API and therefore consumes no tokens. Set ANTHROPIC_API_KEY to see per-agent token counts and cost here."
+                  : "Usage is recorded as each agent calls the model; nothing has been reported for this run yet."
+              }
+            />
           ) : (
             <UsageTable usage={trace.usage} totalTokens={trace.total_tokens} totalCostUsd={trace.total_cost_usd} />
           )}

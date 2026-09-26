@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { AgentName, FeedbackAction, HumanFeedback, ReviewPackage } from "@/lib/types";
+import type { AgentName, AgentProgress, FeedbackAction, HumanFeedback, ReviewPackage } from "@/lib/types";
 import { SPECIALIST_AGENTS } from "@/lib/types";
 import { ApiError, approveResearch, submitFeedback } from "@/lib/api";
 import { PlanView } from "./PlanView";
@@ -11,6 +11,12 @@ import { humanizeEnum } from "@/lib/format";
 interface ReviewPanelProps {
   sessionId: string;
   review: ReviewPackage;
+  /**
+   * The run's current agent statuses. `review.plan` is the snapshot taken when the supervisor wrote the
+   * plan, so its own task statuses are all still "pending" by the time a human sees this panel; without
+   * these every agent that already ran would be rendered as unstarted.
+   */
+  live?: AgentProgress[];
   /** Called after any action succeeds, so the parent can refetch status/review and reflect the new state. */
   onSubmitted: () => void;
 }
@@ -38,7 +44,7 @@ const ALL_ACTIONS: FeedbackAction[] = [
  * plus actions to approve the report or demand more work first. "approve" posts to `POST /approve`;
  * every other action posts a `HumanFeedback` to `POST /feedback`.
  */
-export function ReviewPanel({ sessionId, review, onSubmitted }: ReviewPanelProps) {
+export function ReviewPanel({ sessionId, review, live = [], onSubmitted }: ReviewPanelProps) {
   const [pending, setPending] = useState<FeedbackAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ticker, setTicker] = useState("");
@@ -97,7 +103,7 @@ export function ReviewPanel({ sessionId, review, onSubmitted }: ReviewPanelProps
 
       <section>
         <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-400">Plan</h3>
-        <PlanView plan={review.plan} />
+        <PlanView plan={review.plan} live={live} />
       </section>
 
       <section>

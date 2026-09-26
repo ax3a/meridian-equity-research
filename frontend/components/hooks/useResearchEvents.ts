@@ -21,12 +21,17 @@ interface UseResearchEventsResult {
  * event's `seq`), which the proxy passes straight through so the backend can resume the stream exactly
  * where it left off. No manual retry/backoff logic is needed here.
  */
-export function useResearchEvents(sessionId: string | null): UseResearchEventsResult {
+export function useResearchEvents(sessionId: string | null, active = true): UseResearchEventsResult {
   const [events, setEvents] = useState<ProgressEvent[]>([]);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
 
   useEffect(() => {
-    if (!sessionId) return;
+    // `active` goes false once the run is terminal. Without it EventSource keeps reconnecting to a
+    // stream the server closes immediately, retrying forever against a run that will never emit again.
+    if (!sessionId || !active) {
+      setStreamStatus("closed");
+      return;
+    }
     setEvents([]);
     setStreamStatus("connecting");
 
@@ -53,7 +58,7 @@ export function useResearchEvents(sessionId: string | null): UseResearchEventsRe
     return () => {
       source.close();
     };
-  }, [sessionId]);
+  }, [sessionId, active]);
 
   return { events, streamStatus, lastEvent: events.length ? events[events.length - 1]! : null };
 }

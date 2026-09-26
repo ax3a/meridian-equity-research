@@ -28,7 +28,8 @@ export function LiveRunView({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const { events, streamStatus } = useResearchEvents(sessionId);
+  const runFinished = detail != null && TERMINAL_RUN_STATUSES.includes(detail.status);
+  const { events, streamStatus } = useResearchEvents(sessionId, !runFinished);
 
   const refresh = useCallback(async () => {
     try {
@@ -115,9 +116,11 @@ export function LiveRunView({ sessionId }: { sessionId: string }) {
       <RunHeader id={sessionId} company={detail.company} status={detail.status} query={detail.request.query} />
       <ModeBanners llmMode={detail.llm_mode} usesSnapshotData={detail.uses_snapshot_data} />
 
-      {streamStatus === "reconnecting" && (
+      {/* Only a problem while the run is still going. When it ends the server closes the stream, which
+          is normal: warning about a "disconnection" at that point is just noise on a finished run. */}
+      {streamStatus === "reconnecting" && !isTerminal && (
         <p className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-          Live updates disconnected — reconnecting…
+          Live updates interrupted — reconnecting. Progress below is still being refreshed.
         </p>
       )}
       {streamStatus === "closed" && !isTerminal && (
@@ -144,7 +147,7 @@ export function LiveRunView({ sessionId }: { sessionId: string }) {
 
       {status.approval === "pending" && review && (
         <div className="mb-6">
-          <ReviewPanel sessionId={sessionId} review={review} onSubmitted={refresh} />
+          <ReviewPanel sessionId={sessionId} review={review} live={status.agents} onSubmitted={refresh} />
         </div>
       )}
 

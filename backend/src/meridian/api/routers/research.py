@@ -191,6 +191,7 @@ def _sse(event: ProgressEvent) -> ServerSentEvent:
     """
     return ServerSentEvent(id=str(event.seq), data=event.model_dump_json())
 
+
 async def _stream_events(runtime: Runtime, session_id: str, after_seq: int) -> AsyncIterator[ServerSentEvent]:
     # A client reconnecting after the run already finished would otherwise hang forever: the runner only
     # wakes subscribers that were registered *before* it closed them out. Replay-then-return here avoids
