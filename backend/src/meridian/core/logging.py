@@ -5,13 +5,17 @@ import sys
 from typing import Any
 
 import structlog
+from structlog.typing import EventDict, WrappedLogger
 
 from meridian.core.config import get_settings
 
 _SECRET_KEYS = ("api_key", "apikey", "authorization", "password", "secret", "token")
 
 
-def _redact(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+# structlog's own processor types, not hand-rolled ones: an `EventDict` is a MutableMapping, so a
+# processor declared over `dict` does not actually satisfy the chain it is installed into. This one
+# redacts secrets, so it is worth having the compiler agree it is a valid processor.
+def _redact(_: WrappedLogger, __: str, event_dict: EventDict) -> EventDict:
     for key in list(event_dict):
         if any(s in key.lower() for s in _SECRET_KEYS):
             event_dict[key] = "***"

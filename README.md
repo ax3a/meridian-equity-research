@@ -315,6 +315,12 @@ fails rather than resolving to something plausible.
 .venv/Scripts/python.exe -m pytest tests/e2e -m integration -q     # ~60s, needs network
 ```
 
+Linting and type-checking, both wired into CI and `make lint`:
+
+```bash
+.venv/Scripts/python.exe -m ruff check src tests && .venv/Scripts/python.exe -m mypy src
+```
+
 Frontend: `npm run lint && npx tsc --noEmit && npm run test && npm run build` inside `frontend/`.
 
 ## Evaluation

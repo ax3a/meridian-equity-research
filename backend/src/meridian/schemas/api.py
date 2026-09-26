@@ -181,11 +181,17 @@ class DashboardView(BaseModel):
     stats: dict[str, float]
 
 
+ValuationMethod = Literal["pe", "ev_ebitda", "ev_sales", "price_sales", "price_fcf", "dcf"]
+# Named, so the default is checked against the field's own type. Inline, the lambda's list inferred as
+# `list[str]`, which meant a typo in it would not have been caught by anything but a runtime validation
+# error. `price_sales` is offered but deliberately not on by default.
+DEFAULT_VALUATION_METHODS: list[ValuationMethod] = ["pe", "ev_ebitda", "ev_sales", "price_fcf", "dcf"]
+
+
 class UserPreferences(BaseModel):
     report_length: Literal["brief", "standard", "detailed"] = "standard"
     preferred_sectors: list[str] = Field(default_factory=list, max_length=20)
     preferred_metrics: list[str] = Field(default_factory=list, max_length=30)
-    valuation_methods: list[Literal["pe", "ev_ebitda", "ev_sales", "price_sales", "price_fcf", "dcf"]] = Field(
-        default_factory=lambda: ["pe", "ev_ebitda", "ev_sales", "price_fcf", "dcf"]
-    )
+    # `list(...)` so each model gets its own copy rather than sharing one mutable default.
+    valuation_methods: list[ValuationMethod] = Field(default_factory=lambda: list(DEFAULT_VALUATION_METHODS))
     require_approval: bool = True

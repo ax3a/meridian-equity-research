@@ -7,6 +7,7 @@ not a failure. Never invents an exposure that the filings don't support.
 from __future__ import annotations
 
 from meridian.agents.base import AgentAnswer, AgentDraft, BaseAgent
+from meridian.providers.base import MacroIndicator
 from meridian.schemas.enums import AgentName, Confidence, FindingKind, ReportSection
 from meridian.schemas.research import ResearchTask
 from meridian.schemas.state import ResearchState
@@ -33,12 +34,12 @@ def _clip(text: str, limit: int = 500) -> str:
     return " ".join(text.split())[:limit]
 
 
-def _match_indicator(text: str, indicators: list) -> object | None:
+def _match_indicator(text: str, indicators: list[MacroIndicator]) -> MacroIndicator | None:
     lowered = text.lower()
     for keywords, indicator_keys in _KEYWORD_INDICATORS:
         if any(kw in lowered for kw in keywords):
             for ind in indicators:
-                if getattr(ind, "key", "") in indicator_keys:
+                if ind.key in indicator_keys:
                     return ind
     return indicators[0] if indicators else None
 
@@ -90,11 +91,11 @@ class MacroAgent(BaseAgent):
             indicator = _match_indicator(text, indicators)
             evidence_ids = [passage_evidence_id] if passage_evidence_id else []
             claim = f"Filing language indicates macro exposure: {text}"
-            if indicator is not None and getattr(indicator, "latest", None) is not None:
-                label = getattr(indicator, "label", indicator)
-                unit = getattr(indicator, "unit", "")
-                as_of = getattr(indicator, "as_of", "unknown")
-                claim += f" (latest {label}: {indicator.latest}{unit} as of {as_of})."
+            if indicator is not None and indicator.latest is not None:
+                # `as_of` is optional on the model, so the fallback has to survive a real None rather
+                # than rely on a getattr default that only fires when the attribute is absent.
+                as_of = indicator.as_of.isoformat() if indicator.as_of else "an unknown date"
+                claim += f" (latest {indicator.label}: {indicator.latest}{indicator.unit} as of {as_of})."
                 evidence_ids += macro_evidence_ids[:2]
             findings.append(
                 self.finding(

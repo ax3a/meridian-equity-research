@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from meridian.agents.base import AgentAnswer
 from meridian.agents.macro import MacroAgent
+from meridian.providers.base import MacroIndicator
 from meridian.schemas.enums import AgentName, FindingStatus, ReportSection
 from tests.unit.agents.conftest import build_tool_registry, make_deps, make_state, make_task
 
@@ -67,3 +68,42 @@ async def test_macro_generative_reports_no_material_link(fake_data, events, scri
     assert result.output.status.value == "completed"
     assert result.output.findings == []
     assert "no material" in result.output.summary.lower()
+
+
+async def test_macro_quotes_the_indicator_value_and_its_date(fake_data, events, offline_llm, settings):
+    """The default fixture carries a 10-Year Treasury Yield of 4.2% as of 2025-09-20."""
+    hit = fake_data.add_passage(
+        "Our borrowing costs are sensitive to changes in interest rates across our debt portfolio.",
+        "Item 7A. Quantitative Disclosures",
+    )
+    fake_data.search_filings_fn = lambda query: [hit]
+    tools = build_tool_registry(fake_data)
+    deps = make_deps(settings, tools, offline_llm, events)
+
+    result = await MacroAgent(deps).execute(make_task(AgentName.MACRO), make_state(fake_data.ticker))
+
+    claims = " ".join(f.claim for f in result.output.findings)
+    assert "10-Year Treasury Yield" in claims
+    assert "4.2%" in claims
+    assert "2025-09-20" in claims
+
+
+async def test_macro_indicator_without_a_date_reads_sensibly(fake_data, events, offline_llm, settings):
+    """`as_of` is optional on the model, and a getattr default never fires for an attribute that
+    exists-but-is-None -- which rendered the claim as "as of None"."""
+    fake_data.indicators = [
+        MacroIndicator(key="ust_10y", label="10-Year Treasury Yield", unit="%", latest=4.2, as_of=None, history=[])
+    ]
+    hit = fake_data.add_passage(
+        "Our borrowing costs are sensitive to changes in interest rates across our debt portfolio.",
+        "Item 7A. Quantitative Disclosures",
+    )
+    fake_data.search_filings_fn = lambda query: [hit]
+    tools = build_tool_registry(fake_data)
+    deps = make_deps(settings, tools, offline_llm, events)
+
+    result = await MacroAgent(deps).execute(make_task(AgentName.MACRO), make_state(fake_data.ticker))
+
+    claims = " ".join(f.claim for f in result.output.findings)
+    assert "as of None" not in claims
+    assert "an unknown date" in claims

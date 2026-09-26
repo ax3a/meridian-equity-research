@@ -82,3 +82,7 @@ plugins = ["pydantic.mypy"]
 strict_optional = true
 warn_unused_ignores = true
 ignore_missing_imports = true
+# Three `# type: ignore[no-any-return]` comments existed for errors this setting was never enabled to
+# produce, so they sat inert and `warn_unused_ignores` flagged them. Turning it on makes them mean
+# something again, and it cost one further genuine finding, not a backlog.
+warn_return_any = true

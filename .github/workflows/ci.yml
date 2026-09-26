@@ -81,6 +81,12 @@ jobs:
         working-directory: backend
         run: ruff format --check src tests
 
+      # The frontend job has type-checked on every push from the start; the backend never did, which is
+      # how a backlog accumulated unnoticed in a repo that ships a configured mypy.
+      - name: mypy
+        working-directory: backend
+        run: mypy src
+
       - name: Apply database migrations
         working-directory: backend
         run: alembic upgrade head

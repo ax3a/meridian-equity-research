@@ -26,7 +26,9 @@ def inline_schema_dict(schema: dict[str, Any]) -> dict[str, Any]:
     """
     defs = schema.get("$defs", {})
     root = {k: v for k, v in schema.items() if k != "$defs"}
-    inlined = _resolve_refs(root, defs, frozenset())
+    # `_resolve_refs` walks dicts, lists and scalars alike so it is typed `Any`, but a dict going in
+    # always yields a dict out -- stated here rather than left implicit at the return.
+    inlined: dict[str, Any] = _resolve_refs(root, defs, frozenset())
     _enforce_strict_objects(inlined)
     return inlined
 

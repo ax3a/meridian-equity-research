@@ -9,6 +9,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
@@ -117,7 +118,12 @@ class ResearchRunner:
         self.app = build_graph(agents, settings, self._sink, checkpointer=checkpointer)
         self._tasks: dict[str, Any] = {}
 
-    def _config(self, session_id: str) -> dict[str, Any]:
+    def _config(self, session_id: str) -> RunnableConfig:
+        """The per-run graph config.
+
+        Typed as `RunnableConfig` -- a TypedDict whose keys are exactly the two set here -- rather than
+        `dict[str, Any]`, which matches neither `ainvoke`'s overloads nor `aget_state`'s signature.
+        """
         return {"configurable": {"thread_id": session_id}, "recursion_limit": self.settings.graph_recursion_limit}
 
     async def start(self, request: ResearchRequest) -> str:
@@ -158,12 +164,13 @@ class ResearchRunner:
                 self._close_subscribers(session_id)
         except Exception as exc:  # the run manager must survive a broken graph run
             log.exception("run_failed", session_id=session_id)
-            state = await self.store.get_state(session_id)
-            if state is None:
-                state = ResearchState(session_id=session_id, request=ResearchRequest(query="unknown"))
-            state.status = RunStatus.FAILED
-            state.errors = [*state.errors, RunError(stage="runner", message=str(exc))]
-            await self.store.save_state(session_id, state)
+            # A distinct name from the `state` bound in the try block, which is non-optional: reusing it
+            # made the variable `ResearchState | None` for the whole function.
+            stored = await self.store.get_state(session_id)
+            failed = stored or ResearchState(session_id=session_id, request=ResearchRequest(query="unknown"))
+            failed.status = RunStatus.FAILED
+            failed.errors = [*failed.errors, RunError(stage="runner", message=str(exc))]
+            await self.store.save_state(session_id, failed)
             await self._sink.emit(ProgressEvent(session_id=session_id, type=EventType.RUN_FAILED, message=str(exc)))
             self._close_subscribers(session_id)
 

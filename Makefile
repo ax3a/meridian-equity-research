@@ -63,6 +63,7 @@ lint: lint-backend lint-frontend
 lint-backend:
 	cd $(BACKEND_DIR) && .venv/bin/python -m ruff check src tests
 	cd $(BACKEND_DIR) && .venv/bin/python -m ruff format --check src tests
+	cd $(BACKEND_DIR) && .venv/bin/python -m mypy src
 
 lint-frontend:
 	cd $(FRONTEND_DIR) && npm run lint
