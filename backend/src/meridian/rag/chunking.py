@@ -20,7 +20,10 @@ from dataclasses import dataclass
 
 from meridian.rag.sections import DocumentSection
 
-_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+")
+# Splitting on every ".!? + space" treats "our U.S. liquidity requirements" as two sentences, and the
+# second one then opens a chunk mid-thought. Require the next character to look like a sentence start,
+# and refuse to break after a single-letter abbreviation ("U.S.", "No.", "v.").
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<![A-Z]\.)(?<=[.!?])\s+(?=[\"'(A-Z0-9])")
 _WORD_RE = re.compile(r"\S+")
 _PARAGRAPH_SPLIT_RE = re.compile(r"(\n\s*\n)")
 
@@ -109,14 +112,31 @@ def _split_sentences(text: str, base_offset: int) -> list[tuple[str, int]]:
     return result
 
 
-def _take_overlap_words(text: str, overlap_tokens: int) -> str:
-    if overlap_tokens <= 0:
+def _take_overlap(text: str, overlap_tokens: int) -> str:
+    """The trailing whole sentences of `text`, within the overlap budget.
+
+    Carrying the last N *words* instead made every chunk after the first in a section begin
+    mid-sentence by construction -- 62% of a real index did. That is not only unreadable when the
+    passage is quoted as a claim: the chunk is embedded as it stands, so a fragment that opens
+    mid-thought is also a worse vector for retrieval.
+
+    Whole sentences serve the carry's actual purpose -- keeping a fact that straddles a boundary
+    findable from either side -- just as well. When even one trailing sentence will not fit the budget
+    the carry is dropped, because the next chunk then starts on a fresh unit, which is already a clean
+    boundary.
+    """
+    if overlap_tokens <= 0 or not text.strip():
         return ""
-    words = text.split()
-    n = max(0, round(overlap_tokens / _TOKENS_PER_WORD))
-    if n == 0 or not words:
-        return ""
-    return " ".join(words[-n:])
+    sentences = [s for s in _SENTENCE_BOUNDARY_RE.split(text) if s.strip()]
+    taken: list[str] = []
+    total = 0
+    for sentence in reversed(sentences):
+        tokens = estimate_tokens(sentence)
+        if total + tokens > overlap_tokens:
+            break
+        taken.append(sentence)
+        total += tokens
+    return " ".join(reversed(taken)).strip()
 
 
 def chunk_section(section: DocumentSection, *, target_tokens: int = 350, overlap_tokens: int = 50) -> list[ChunkDraft]:
@@ -151,7 +171,7 @@ def chunk_section(section: DocumentSection, *, target_tokens: int = 350, overlap
         text = " ".join(pieces).strip()
         start = section.start_offset + (current_start if current_start is not None else 0)
         drafts.append(ChunkDraft(index=len(drafts), text=text, token_count=estimate_tokens(text), start_offset=start))
-        carry = _take_overlap_words(text, overlap_tokens)
+        carry = _take_overlap(text, overlap_tokens)
         current = []
         current_tokens = 0
         current_start = None

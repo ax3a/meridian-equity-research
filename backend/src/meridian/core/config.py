@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     max_supervisor_loops: int = 2
     agent_timeout_seconds: float = 300.0
     graph_recursion_limit: int = 60
+    # Runs admitted to the event loop at once. Three concurrent cold runs measured a /health p95 of
+    # 503ms on one machine, so four leaves headroom; beyond that they simply queue. Raise it only
+    # alongside a real worker process -- this bounds one asyncio loop, not a cluster.
+    max_concurrent_runs: int = Field(default=4, ge=1, le=64)
 
     otel_exporter_otlp_endpoint: str | None = None
     langsmith_api_key: SecretStr | None = None

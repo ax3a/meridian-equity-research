@@ -114,3 +114,59 @@ def test_chunking_drops_navigation_and_keeps_surrounding_disclosure() -> None:
 
     assert "Table of Contents" not in body
     assert "preserve our reputation" in body
+
+
+def test_overlap_carries_whole_sentences_so_chunks_never_open_mid_sentence() -> None:
+    """Regression: the carry was the last ~38 words, so every chunk after the first in a section began
+    mid-sentence by construction -- 62% of a real index did. The chunk is embedded as it stands, so this
+    cost retrieval quality, not just readability."""
+    sentence = "We operate a large number of retail stores across many states and territories. "
+    section = DocumentSection(
+        key="1",
+        title="Item 1. Business",
+        text=" ".join(f"Paragraph {i}. " + sentence * 6 for i in range(6)),
+        start_offset=0,
+    )
+
+    drafts = chunk_section(section, target_tokens=120, overlap_tokens=40)
+
+    assert len(drafts) > 1, "the fixture must actually span several chunks"
+    for draft in drafts:
+        assert not draft.text[0].islower(), f"chunk {draft.index} opens mid-sentence: {draft.text[:60]!r}"
+
+
+def test_overlap_still_repeats_context_across_the_boundary() -> None:
+    """The carry exists so a fact spanning a boundary stays findable from either side; whole sentences
+    must not quietly become no overlap at all."""
+    section = DocumentSection(
+        key="1",
+        title="Item 1. Business",
+        text=" ".join(f"Distinct sentence number {i} about our operations and markets." for i in range(40)),
+        start_offset=0,
+    )
+
+    drafts = chunk_section(section, target_tokens=100, overlap_tokens=40)
+
+    assert len(drafts) > 1
+    repeated = [
+        s
+        for s in ("Distinct sentence number",)
+        if any(drafts[i].text.split(".")[0] in drafts[i - 1].text for i in range(1, len(drafts)))
+    ]
+    assert repeated, "consecutive chunks should share their boundary sentences"
+
+
+def test_a_trailing_sentence_larger_than_the_budget_is_not_carried() -> None:
+    """Carrying it would inflate the next chunk past its target; the next unit is a clean start anyway."""
+    long_sentence = "We " + "consider various operational factors " * 30 + "in our planning."
+    section = DocumentSection(
+        key="1",
+        title="Item 1. Business",
+        text=f"Short opener here. {long_sentence} Another ordinary sentence follows the long one.",
+        start_offset=0,
+    )
+
+    drafts = chunk_section(section, target_tokens=60, overlap_tokens=20)
+
+    for draft in drafts:
+        assert not draft.text[0].islower()

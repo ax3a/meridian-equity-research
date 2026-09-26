@@ -40,10 +40,12 @@ anything else:
   stack with results persisted (a Microsoft run: 60s, 13 sections, 933 sources, 11,553 evidence records).
   The DB integration tests and the pgvector store tests pass against a real pgvector instance, and skip
   cleanly when one is not reachable.
-- **A run briefly stalls other requests.** Research is CPU-heavy (parsing megabyte filings, embedding
-  hundreds of chunks) and the API runs it in-process, so during a run `/health` can take up to ~3s in the
-  worst case. Offloading the heavy work to threads brought that down from 11s, but the real fix is a
-  separate worker process, which this build does not have.
+- **Runs execute in the API process, capped at four at once.** A fifth concurrent request is refused
+  with `429 too_many_active_runs` rather than queued. Measured `/health` latency: ~60ms idle, p95 264ms
+  beside one cold run, p95 792ms (worst observed 2.2s) with four cold runs saturating the cap. The real
+  ceiling is not latency but durability — in-flight runs live in an in-memory checkpointer and do not
+  survive a restart. A separate worker process with a persistent checkpointer is the fix, and this build
+  does not have one.
 - **Without an API key, the system runs in deterministic offline mode**: every specialist agent has a
   non-generative code path that derives findings directly from tool output, so a full run produces real
   figures and real citations, but mechanical, template-driven prose rather than model-written analysis.
@@ -353,8 +355,10 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
 - The generative LLM path has unit-test coverage against a scripted fake client but **has never been run
   against the real Anthropic API** — no key was available. Prompt shapes, tool-call parsing and refusal
   handling are unverified against the real model.
-- **A run briefly stalls other requests.** Research is CPU-heavy and runs in-process, so /health can
-  take up to ~3s during a run. A separate worker process is the proper fix and is on the roadmap.
+- **Runs execute in the API process, capped at four concurrent** (`MAX_CONCURRENT_RUNS`); a fifth is
+  refused with `429`, not queued. Measured `/health`: ~60ms idle, p95 264ms alongside one cold run,
+  p95 792ms and a worst observed 2.2s with the cap saturated. The binding limit is durability, not
+  latency: the LangGraph checkpointer is in-memory, so a restart loses any run still in flight.
 - Without an LLM key, report prose is mechanically composed from finding claims — correct and cited, but
   not fluent analysis.
 - Stooq (the documented keyless price source) currently returns an anti-bot challenge page instead of CSV;
@@ -364,16 +368,17 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
   `ARRAY(0x...)` strings; peer discovery falls back to ranking XBRL revenue frames when this happens.
 - GDELT enforces an informal, undocumented rate limit and no key-based alternative is wired in by default.
 - **Filing text is extracted from HTML, and extraction is imperfect.** Page-break navigation, section
-  headings and flattened tables are filtered out of quoted claims, but a passage can still begin
-  mid-sentence, because chunks are cut on token boundaries rather than sentence ones. The cited evidence
-  always holds the full passage, so nothing is lost — it just does not always read cleanly.
+  headings and flattened tables are filtered out of quoted claims, and chunk boundaries are
+  sentence-aligned, so 0.3% of indexed chunks now open mid-sentence (it was 60.5% when the overlap
+  carried whole words instead). What survives is page headers and table captions that read like prose;
+  the cited evidence always holds the full passage.
 - This is a reference build for one machine, not a deployed or load-tested service.
 
 ## Roadmap
 
 - Verify the generative LLM path against the real Anthropic API and tune prompts based on real model output.
-- Celery-based distributed runner for horizontal scale beyond the current in-process asyncio runner.
+- A persistent LangGraph checkpointer plus a worker process, so an in-flight run survives a restart and
+  concurrency is bounded by workers rather than by one event loop.
 - A keyed market-data provider (FMP/Polygon) as the default primary, with Yahoo/Stooq as fallback only.
-- Sentence-aware chunk boundaries, so a quoted passage never opens mid-sentence.
 - Extract filing tables as structured rows rather than flattening them into text, so the figures in them
   become citable metrics instead of being filtered out of claims.

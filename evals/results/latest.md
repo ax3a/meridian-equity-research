@@ -1,6 +1,6 @@
 # Meridian evaluation scorecard
 
-Generated 2026-09-26T00:00:27+00:00 · LLM mode: **offline** · data mode: **auto**
+Generated 2026-09-26T11:03:19+00:00 · LLM mode: **offline** · data mode: **auto**
 
 Offline LLM mode means narrative text is template-based; figures and citations are real either way.
 
@@ -8,12 +8,12 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 
 | Case | Resolved | Passed | Latency | Notes |
 | --- | --- | --- | --- | --- |
-| `msft` | MSFT | yes | 51.7s |  |
-| `nvda_focus` | NVDA | yes | 50.0s |  |
-| `aapl` | AAPL | yes | 75.2s |  |
-| `jpm_bank` | JPM | yes | 67.6s |  |
-| `quick_depth` | MSFT | yes | 45.6s |  |
-| `unknown_company` | - | yes | 0.3s | failed cleanly |
+| `msft` | MSFT | yes | 36.5s |  |
+| `nvda_focus` | NVDA | yes | 71.9s |  |
+| `aapl` | AAPL | yes | 59.1s |  |
+| `jpm_bank` | JPM | yes | 49.5s |  |
+| `quick_depth` | MSFT | yes | 19.4s |  |
+| `unknown_company` | - | yes | 0.6s | failed cleanly |
 
 ## Metrics by case
 
@@ -31,7 +31,7 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | report_completeness | 1.000 | missing sections: none (expected 6 for this depth) |
 | tool_success_rate | 0.971 | 33/34 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 34 tool calls (0 tokens means offline mode) |
-| latency_seconds | 51.700 | wall-clock time for the whole run |
+| latency_seconds | 36.500 | wall-clock time for the whole run |
 
 ### nvda_focus
 
@@ -39,15 +39,15 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | --- | --- | --- |
 | task_completion | 1.000 | 9/9 dispatched tasks completed (0 failed) |
 | routing_accuracy | 1.000 | missing=none; wrongly included=none |
-| citation_coverage | 1.000 | 68/68 fact/calculated findings carry resolvable support |
-| source_correctness | 1.000 | 78/78 citations resolve to a real source (0 unknown evidence, 0 orphaned source) |
+| citation_coverage | 1.000 | 71/71 fact/calculated findings carry resolvable support |
+| source_correctness | 1.000 | 81/81 citations resolve to a real source (0 unknown evidence, 0 orphaned source) |
 | calculation_accuracy | 1.000 | 135/135 metrics reproduce exactly |
-| critic_rejection_rate | 0.153 | 72 approved, 13 unverified, 0 rejected; 22 issues raised over 1 round(s) |
-| unsupported_report_claims | 0.000 | 0/73 factual paragraphs lack a resolvable citation or metric ref |
+| critic_rejection_rate | 0.159 | 74 approved, 14 unverified, 0 rejected; 23 issues raised over 1 round(s) |
+| unsupported_report_claims | 0.000 | 0/76 factual paragraphs lack a resolvable citation or metric ref |
 | report_completeness | 1.000 | missing sections: none (expected 6 for this depth) |
 | tool_success_rate | 0.970 | 32/33 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 33 tool calls (0 tokens means offline mode) |
-| latency_seconds | 50.000 | wall-clock time for the whole run |
+| latency_seconds | 71.900 | wall-clock time for the whole run |
 
 ### aapl
 
@@ -55,15 +55,15 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | --- | --- | --- |
 | task_completion | 1.000 | 9/9 dispatched tasks completed (0 failed) |
 | routing_accuracy | 1.000 | missing=none; wrongly included=none |
-| citation_coverage | 1.000 | 85/85 fact/calculated findings carry resolvable support |
-| source_correctness | 1.000 | 104/104 citations resolve to a real source (0 unknown evidence, 0 orphaned source) |
+| citation_coverage | 1.000 | 86/86 fact/calculated findings carry resolvable support |
+| source_correctness | 1.000 | 105/105 citations resolve to a real source (0 unknown evidence, 0 orphaned source) |
 | calculation_accuracy | 1.000 | 135/135 metrics reproduce exactly |
-| critic_rejection_rate | 0.117 | 91 approved, 12 unverified, 0 rejected; 22 issues raised over 1 round(s) |
-| unsupported_report_claims | 0.000 | 0/90 factual paragraphs lack a resolvable citation or metric ref |
+| critic_rejection_rate | 0.115 | 92 approved, 12 unverified, 0 rejected; 22 issues raised over 1 round(s) |
+| unsupported_report_claims | 0.000 | 0/91 factual paragraphs lack a resolvable citation or metric ref |
 | report_completeness | 1.000 | missing sections: none (expected 6 for this depth) |
 | tool_success_rate | 1.000 | 33/33 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 33 tool calls (0 tokens means offline mode) |
-| latency_seconds | 75.200 | wall-clock time for the whole run |
+| latency_seconds | 59.100 | wall-clock time for the whole run |
 
 ### jpm_bank
 
@@ -71,15 +71,15 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | --- | --- | --- |
 | task_completion | 1.000 | 9/9 dispatched tasks completed (0 failed) |
 | routing_accuracy | 1.000 | missing=none; wrongly included=none |
-| citation_coverage | 1.000 | 70/70 fact/calculated findings carry resolvable support |
-| source_correctness | 1.000 | 93/93 citations resolve to a real source (0 unknown evidence, 0 orphaned source) |
+| citation_coverage | 1.000 | 51/51 fact/calculated findings carry resolvable support |
+| source_correctness | 1.000 | 64/64 citations resolve to a real source (0 unknown evidence, 0 orphaned source) |
 | calculation_accuracy | 1.000 | 62/62 metrics reproduce exactly |
-| critic_rejection_rate | 0.118 | 75 approved, 10 unverified, 0 rejected; 15 issues raised over 1 round(s) |
-| unsupported_report_claims | 0.000 | 0/74 factual paragraphs lack a resolvable citation or metric ref |
+| critic_rejection_rate | 0.154 | 55 approved, 10 unverified, 0 rejected; 16 issues raised over 1 round(s) |
+| unsupported_report_claims | 0.000 | 0/55 factual paragraphs lack a resolvable citation or metric ref |
 | report_completeness | 1.000 | missing sections: none (expected 6 for this depth) |
-| tool_success_rate | 1.000 | 32/32 tool calls succeeded |
+| tool_success_rate | 0.969 | 31/32 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 32 tool calls (0 tokens means offline mode) |
-| latency_seconds | 67.600 | wall-clock time for the whole run |
+| latency_seconds | 49.500 | wall-clock time for the whole run |
 
 ### quick_depth
 
@@ -95,7 +95,7 @@ Offline LLM mode means narrative text is template-based; figures and citations a
 | report_completeness | 1.000 | missing sections: none (expected 4 for this depth) |
 | tool_success_rate | 0.971 | 33/34 tool calls succeeded |
 | estimated_cost_usd | 0 | 0 tokens across 0 LLM call(s); 34 tool calls (0 tokens means offline mode) |
-| latency_seconds | 45.600 | wall-clock time for the whole run |
+| latency_seconds | 19.400 | wall-clock time for the whole run |
 
 ## Prompt injection
 

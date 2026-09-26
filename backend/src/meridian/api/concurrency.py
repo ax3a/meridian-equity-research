@@ -9,23 +9,23 @@ terminal) via `runner.wait_idle`.
 from __future__ import annotations
 
 import asyncio
-import os
 
+from meridian.core.config import get_settings
 from meridian.core.logging import get_logger
 
 log = get_logger(__name__)
 
-DEFAULT_MAX_CONCURRENT_RUNS = 4
-
 
 def _configured_limit() -> int:
-    raw = os.environ.get("MERIDIAN_MAX_CONCURRENT_RUNS")
-    if not raw:
-        return DEFAULT_MAX_CONCURRENT_RUNS
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return DEFAULT_MAX_CONCURRENT_RUNS
+    """The limit from `Settings`, like every other tunable in the system.
+
+    This used to read `os.environ["MERIDIAN_MAX_CONCURRENT_RUNS"]` directly, which was wrong twice
+    over: the name did not match any settings field (`Settings` declares no env prefix, so it binds
+    `MAX_CONCURRENT_RUNS`), and pydantic-settings never copies `.env` entries into `os.environ` -- so
+    setting it in `.env`, the mechanism the README documents, did nothing at all. It appeared to work
+    only under Docker, where compose exports the env file into the real environment.
+    """
+    return get_settings().max_concurrent_runs
 
 
 class RunAdmission:

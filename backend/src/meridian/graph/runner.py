@@ -116,7 +116,12 @@ class ResearchRunner:
         self._subscribers: dict[str, list[Any]] = defaultdict(list)
         self._sink = _RouterEventSink(self.store, self._subscribers)
         self.app = build_graph(agents, settings, self._sink, checkpointer=checkpointer)
-        self._tasks: dict[str, Any] = {}
+        # Entries are removed as each run settles. Left to accumulate, every finished run's Task -- and
+        # the coroutine frame it holds -- stayed here for the life of the process.
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        # Concurrency is bounded by `api.concurrency.RunAdmission`, which rejects an over-limit request
+        # with 429 before this class is ever called. Deliberately not duplicated here: a second limiter
+        # that silently queues would contradict the first one that visibly refuses.
 
     def _config(self, session_id: str) -> RunnableConfig:
         """The per-run graph config.
@@ -151,6 +156,15 @@ class ResearchRunner:
             await task
 
     async def _drive(self, session_id: str, graph_input: Any) -> None:
+        try:
+            await self._drive_inner(session_id, graph_input)
+        finally:
+            # Only if this task is still the registered one: an approval resume replaces the entry
+            # while the run it superseded is settling, and that newer task must not be dropped.
+            if self._tasks.get(session_id) is asyncio.current_task():
+                self._tasks.pop(session_id, None)
+
+    async def _drive_inner(self, session_id: str, graph_input: Any) -> None:
         config = self._config(session_id)
         try:
             await self.app.ainvoke(graph_input, config=config)
