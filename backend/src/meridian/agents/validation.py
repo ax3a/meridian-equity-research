@@ -14,6 +14,7 @@ class ValidationReport(BaseModel):
     stripped_evidence_ids: list[str] = Field(default_factory=list)
     stripped_metric_refs: list[str] = Field(default_factory=list)
     unverified_finding_ids: list[str] = Field(default_factory=list)
+    relabelled_finding_ids: list[str] = Field(default_factory=list)
     duplicate_finding_ids: list[str] = Field(default_factory=list)
 
     @property
@@ -43,14 +44,26 @@ def validate_findings(
         report.stripped_evidence_ids += [e for e in f.evidence_ids if e not in evidence_ids]
         report.stripped_metric_refs += [m for m in f.metric_refs if m not in metric_refs]
 
+        kind = f.kind
+        # A claim labelled FACT but supported only by a computed metric is a calculation, and saying so
+        # is both true and what keeps it. Discarding it was strictly worse: a live model produced nine
+        # such findings in one run -- every one correctly citing a real metric -- and all nine were
+        # thrown away over the label rather than the substance. Relabelling rather than merely accepting
+        # keeps the report's Fact/Calculated badge honest, which is the whole point of having it.
+        if kind is FindingKind.FACT and good_m and not good_ev:
+            kind = FindingKind.CALCULATED
+            report.relabelled_finding_ids.append(f.id)
+
         supported = {
             FindingKind.FACT: bool(good_ev),
             FindingKind.CALCULATED: bool(good_m),
             FindingKind.INTERPRETATION: bool(good_ev or good_m),
-        }[f.kind]
+        }[kind]
         status = f.status
         if not supported and status != FindingStatus.REJECTED:
             status = FindingStatus.UNVERIFIED
             report.unverified_finding_ids.append(f.id)
-        out.append(f.model_copy(update={"evidence_ids": good_ev, "metric_refs": good_m, "status": status}))
+        out.append(
+            f.model_copy(update={"evidence_ids": good_ev, "metric_refs": good_m, "status": status, "kind": kind})
+        )
     return out, report

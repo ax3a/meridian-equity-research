@@ -135,7 +135,9 @@ class RiskAgent(BaseAgent):
                 f"risk category ({categories}) and only when you have real support: filing text via "
                 "search_filings/get_filing_section for most categories, or a computed leverage/liquidity "
                 "metric via calculate_metric for debt and liquidity risk. Set each finding's category field "
-                "to the matching value. Skip a category rather than inventing a risk you cannot support."
+                "to the matching value. Cite every finding: evidence_ids with the real ids the tools returned, "
+                "or metric_refs for a computed leverage/liquidity figure. Never invent an id. Skip a category "
+                "rather than inventing a risk you cannot support."
             ),
             schema=AgentAnswer,
             context={"ticker": ticker, "objective": task.objective},

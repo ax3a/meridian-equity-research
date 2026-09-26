@@ -306,8 +306,10 @@ class ValuationAgent(BaseAgent):
             ctx,
             task=(
                 f"Write VALUATION section findings for {ticker} using ONLY the multiples and DCF result given "
-                "in trusted_context. Do not compute, restate with a different number, or invent any multiple, "
-                "discount rate, growth assumption or per-share value."
+                "in trusted_context. Set metric_refs on every finding to the refs named there (e.g. "
+                "'current.pe'); a finding with no metric_refs is discarded as unsupported. Do not compute, "
+                "restate with a different number, or invent any multiple, discount rate, growth assumption or "
+                "per-share value."
             ),
             schema=AgentAnswer,
             evidence=[],

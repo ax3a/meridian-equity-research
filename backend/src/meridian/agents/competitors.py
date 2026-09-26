@@ -191,7 +191,8 @@ class CompetitorsAgent(BaseAgent):
                 "a different ticker with a reason in proposed_peers if you believe it is a materially better "
                 "comparator -- every proposal is independently validated before use, so an unresolvable ticker "
                 "is simply dropped. Use search_filings/get_peer_snapshot to support INDUSTRY_COMPETITION "
-                "findings, citing only evidence ids the tools actually returned."
+                "findings. Cite every finding with real evidence ids the tools actually returned; never invent "
+                "an id."
             ),
             schema=CompetitorsAnswer,
             context=context,
