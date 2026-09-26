@@ -371,10 +371,13 @@ Redis-backed rate limiting, and a strict frontend CSP. Full writeup, including r
   itself is verified: a full research run completed against Google Gemini, 29 model calls, zero HTTP
   errors, a 12-section report with resolvable citations. What stays unverified is Anthropic-specific:
   the beta fallback header, refusal `stop_reason` handling and `output_config`.
-- **A real model does not always cite the way it is told to.** In that Gemini run, 10 of 36 citation
-  markers referenced a *finding* id rather than an *evidence* id. The validator caught every one and
-  recorded them as unverified rather than presenting them as sourced — which is the behaviour that
-  matters — but it is a prompt-quality gap that only a live model revealed.
+- **Agents under Gemini produce claims they cannot source.** In a live run, 20 findings came back
+  unverified — the `risk` agent produced no sourced findings at all, and `financials` ten. They are
+  marked unverified and kept out of the cited body rather than presented as sourced, so nothing false
+  is published, but the report is thinner than it should be. This is prompt tuning against a real
+  model, and it is the open item: the prompts were written against a scripted fake that never pushed
+  back. (A related defect — the model citing *finding* ids rather than *evidence* ids — is fixed: those
+  markers now resolve to the finding's own evidence.)
 - **Free tiers meter aggressively.** `gemini-flash-latest` exhausted its quota within one run;
   `gemini-flash-lite-latest` has a workable one. `LLM_REQUESTS_PER_MINUTE` paces the calls, which makes
   a run take minutes rather than seconds. That is the cost of running generative mode for free.

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from meridian.agents import report_writer
 from meridian.agents.critic import parse_figures, within_tolerance
-from meridian.agents.report_writer import ReportWriter
+from meridian.agents.report_writer import DraftParagraph, ReportWriter
 from meridian.providers.llm.scripted import ScriptedLLMProvider
 from meridian.schemas.enums import AgentName, FindingKind, FindingStatus, ReportSection
+from meridian.schemas.findings import Finding
 from meridian.schemas.report import ReportSectionContent
 
 from .conftest_orchestration import (
@@ -229,3 +231,64 @@ async def test_offline_executive_summary_numbers_are_grounded_in_metrics(setting
     assert figures, "expected the headline financials sentence to carry at least one number"
     for number in figures:
         assert any(within_tolerance(number, v) for v in known_values), f"{number} is not in the metrics table"
+
+
+def _finding(finding_id: str, evidence_ids: list[str]) -> Finding:
+    return Finding(
+        id=finding_id,
+        agent=AgentName.COMPANY,
+        claim="A claim that rests on evidence.",
+        kind=FindingKind.FACT,
+        section=ReportSection.COMPANY_OVERVIEW,
+        evidence_ids=evidence_ids,
+    )
+
+
+def test_a_finding_marker_is_rewritten_to_its_own_evidence() -> None:
+    """A live model cites findings as well as evidence, whatever the prompt says.
+
+    Gemini wrote `[fnd_...]` for 10 of 36 markers in the first real generative run. A finding is not a
+    source, so citing one is circular -- but it knows the evidence it rests on, and substituting that
+    turns a dead marker into a real citation.
+    """
+    findings = [_finding("fnd_aaa111", ["ev_111", "ev_222"])]
+
+    out = report_writer._resolve_finding_markers("Revenue grew [fnd_aaa111].", findings)
+
+    assert out == "Revenue grew [ev_111][ev_222]."
+
+
+def test_an_evidence_marker_is_left_alone() -> None:
+    findings = [_finding("fnd_aaa111", ["ev_111"])]
+
+    text = "Revenue grew [ev_999]."
+    assert report_writer._resolve_finding_markers(text, findings) == text
+
+
+def test_a_finding_with_no_evidence_is_left_for_validation_to_catch() -> None:
+    """Silently dropping it would turn an uncited claim into one that merely looks uncited."""
+    findings = [_finding("fnd_bbb222", [])]
+
+    out = report_writer._resolve_finding_markers("Revenue grew [fnd_bbb222].", findings)
+
+    assert out == "Revenue grew [fnd_bbb222]."
+    assert report_writer._unresolved_markers(
+        [DraftParagraph(text=out, kind=FindingKind.FACT)], findings, {"ev_111"}
+    ) == {"fnd_bbb222"}
+
+
+def test_an_unknown_finding_id_counts_as_unresolved() -> None:
+    bad = report_writer._unresolved_markers(
+        [DraftParagraph(text="Grew [fnd_ccc333].", kind=FindingKind.FACT)], [], {"ev_111"}
+    )
+    assert bad == {"fnd_ccc333"}
+
+
+def test_a_resolved_marker_is_not_reported_as_a_problem() -> None:
+    findings = [_finding("fnd_aaa111", ["ev_111"])]
+
+    bad = report_writer._unresolved_markers(
+        [DraftParagraph(text="Grew [fnd_aaa111].", kind=FindingKind.FACT)], findings, {"ev_111"}
+    )
+
+    assert bad == set()

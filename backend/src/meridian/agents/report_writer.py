@@ -42,6 +42,12 @@ from meridian.tools.base import ToolContext
 log = get_logger(__name__)
 
 _MARKER_RE = re.compile(r"\[(ev_[0-9a-f]+)\]")
+# A live model cites findings as well as evidence, whatever the prompt says: Gemini wrote `[fnd_...]`
+# for 10 of 36 markers in the first real generative run. A finding id is a reasonable thing to reach
+# for -- the findings are what it was given -- but it is not a source, and the previous regex did not
+# even match one, so the marker sat in the prose as literal text contributing no citation at all and
+# the paragraph was not flagged. They are resolved to the finding's own evidence instead.
+_FINDING_MARKER_RE = re.compile(r"\[(fnd_[0-9a-f]+)\]")
 
 _NO_FINDINGS_SENTENCE = "This run produced no approved findings, so no executive summary could be generated."
 
@@ -341,8 +347,9 @@ class ReportWriter(BaseAgent):
             "the valuation headline if present, the strongest bull point, the strongest bear point, and the "
             "top risk(s) -- using ONLY the findings and metrics listed in context. Every sentence with a fact "
             "or calculated figure must end with a citation marker like [ev_xxx] using an evidence id that "
-            "actually appears in the evidence block below. Any number you write must match a value in the "
-            "metrics context (rounding is fine). Do not invent ids, figures or claims beyond what is given."
+            "actually appears in the evidence block below. Cite evidence ids only -- an id beginning fnd_ is "
+            "a finding, not a source, and citing one is circular. Any number you write must match a value in "
+            "the metrics context (rounding is fine). Do not invent ids, figures or claims beyond what is given."
         )
         known_ids = set(state.evidence)
         error_note = ""
@@ -354,7 +361,7 @@ class ReportWriter(BaseAgent):
                 )
             except LLMOutputError:
                 return None
-            bad_markers = {m for p in draft.paragraphs for m in _MARKER_RE.findall(p.text) if m not in known_ids}
+            bad_markers = _unresolved_markers(draft.paragraphs, candidates, known_ids)
             bad_numbers = _numbers_not_grounded_in_metrics(draft.paragraphs, known_metric_values)
             if not bad_markers and not bad_numbers:
                 paragraphs = [self._paragraph_from_draft(p, candidates) for p in draft.paragraphs]
@@ -422,8 +429,9 @@ class ReportWriter(BaseAgent):
         base_task = (
             f"Write the '{_SECTION_TITLES[section]}' section of the research report using ONLY the findings "
             "listed in context. Every sentence carrying a fact or calculated figure must end with a citation "
-            "marker like [ev_xxx] using an evidence id that actually appears in the evidence block below. Do "
-            "not invent ids, figures or claims beyond what the findings support."
+            "marker like [ev_xxx] using an evidence id that actually appears in the evidence block below. "
+            "Cite evidence ids only -- an id beginning fnd_ is a finding, not a source, and citing one is "
+            "circular. Do not invent ids, figures or claims beyond what the findings support."
         )
         known_ids = set(state.evidence)
         error_note = ""
@@ -435,7 +443,7 @@ class ReportWriter(BaseAgent):
                 )
             except LLMOutputError:
                 return None
-            bad_markers = {m for p in draft.paragraphs for m in _MARKER_RE.findall(p.text) if m not in known_ids}
+            bad_markers = _unresolved_markers(draft.paragraphs, findings, known_ids)
             if not bad_markers:
                 paragraphs = [self._paragraph_from_draft(p, findings) for p in draft.paragraphs]
                 return ReportSectionContent(
@@ -445,17 +453,47 @@ class ReportWriter(BaseAgent):
         return None
 
     def _paragraph_from_draft(self, p: DraftParagraph, findings: list[Finding]) -> ReportParagraph:
-        markers = list(dict.fromkeys(_MARKER_RE.findall(p.text)))
+        text = _resolve_finding_markers(p.text, findings)
+        markers = list(dict.fromkeys(_MARKER_RE.findall(text)))
         finding_ids = [f.id for f in findings if any(m in f.evidence_ids for m in markers)]
         metric_refs = [ref for f in findings if f.id in finding_ids for ref in f.metric_refs]
         return ReportParagraph(
-            text=p.text,
+            text=text,
             kind=p.kind,
             evidence_ids=markers,
             metric_refs=metric_refs,
             finding_ids=finding_ids,
             unverified=False,
         )
+
+
+def _resolve_finding_markers(text: str, findings: list[Finding]) -> str:
+    """Rewrite `[fnd_x]` to the evidence that finding actually rests on.
+
+    A finding is not a source, so citing one is circular -- but the model's intent is sound, and the
+    finding knows its own evidence. Substituting it turns a dead marker into a real citation. A finding
+    that is unknown here, or that carries no evidence of its own, is left alone so that the caller's
+    validation sees an unresolved marker and asks for a rewrite rather than quietly dropping it.
+    """
+    by_id = {f.id: f for f in findings}
+
+    def substitute(match: re.Match[str]) -> str:
+        finding = by_id.get(match.group(1))
+        if finding is None or not finding.evidence_ids:
+            return match.group(0)
+        return "".join(f"[{eid}]" for eid in dict.fromkeys(finding.evidence_ids))
+
+    return _FINDING_MARKER_RE.sub(substitute, text)
+
+
+def _unresolved_markers(paragraphs: list[DraftParagraph], findings: list[Finding], known_ids: set[str]) -> set[str]:
+    """Markers that will not resolve to evidence once finding ids have been substituted."""
+    bad: set[str] = set()
+    for paragraph in paragraphs:
+        resolved = _resolve_finding_markers(paragraph.text, findings)
+        bad |= {m for m in _MARKER_RE.findall(resolved) if m not in known_ids}
+        bad |= set(_FINDING_MARKER_RE.findall(resolved))
+    return bad
 
 
 def _numbers_not_grounded_in_metrics(paragraphs: list[DraftParagraph], known_values: list[MetricValue]) -> list[float]:
