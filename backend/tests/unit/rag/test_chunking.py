@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from meridian.rag.chunking import chunk_section, estimate_tokens
+from meridian.rag.chunking import chunk_section, estimate_tokens, is_navigation_noise, strip_navigation
 from meridian.rag.sections import DocumentSection
 
 
@@ -62,3 +62,55 @@ def test_chunk_never_crosses_section_boundary() -> None:
         assert "risk factor" not in d.text.lower()
     for d in drafts_b:
         assert "business content" not in d.text.lower()
+
+
+# The page-break furniture below is copied from a real Walmart 10-Q, where it was retrieved as a
+# top-scoring passage and quoted in a report as a cited fact.
+_REAL_TOC_RUN = (
+    "7 Table of Contents Walmart Inc. Notes to Condensed Consolidated Financial Statements Note 1. "
+    "Note 2. 8 Table of Contents Note 3. 9 Table of Contents Note 4. 10 Table of Contents Note 5. "
+    "11 Table of Contents 12 Table of Contents Note 6."
+)
+
+_REAL_PARAGRAPH = (
+    "We must continue to preserve our reputation, which is impacted by public perceptions and customer "
+    "experiences. It may be difficult to address negative publicity across media channels, regardless of "
+    "whether it is accurate. Our reputation affects our ability to attract and retain associates."
+)
+
+
+def test_strip_navigation_removes_page_break_links_and_their_page_numbers() -> None:
+    text = "Table of Contents Our operations are subject to numerous state laws. 14 Table of Contents"
+    assert strip_navigation(text) == "Our operations are subject to numerous state laws."
+
+
+def test_strip_navigation_leaves_ordinary_prose_untouched() -> None:
+    assert strip_navigation(_REAL_PARAGRAPH) == _REAL_PARAGRAPH
+
+
+def test_table_of_contents_run_is_navigation_noise() -> None:
+    assert is_navigation_noise(strip_navigation(_REAL_TOC_RUN)) is True
+
+
+def test_real_paragraph_is_not_navigation_noise() -> None:
+    assert is_navigation_noise(_REAL_PARAGRAPH) is False
+
+
+def test_short_text_is_never_rejected_as_noise() -> None:
+    # Two fragments carry too little signal; dropping real disclosure is worse than keeping furniture.
+    assert is_navigation_noise("Item 1A. Risk Factors.") is False
+
+
+def test_chunking_drops_navigation_and_keeps_surrounding_disclosure() -> None:
+    section = DocumentSection(
+        key="7",
+        title="Item 7. Management's Discussion and Analysis",
+        text=f"{_REAL_TOC_RUN}\n\n{_REAL_PARAGRAPH}",
+        start_offset=0,
+    )
+
+    drafts = chunk_section(section)
+    body = " ".join(d.text for d in drafts)
+
+    assert "Table of Contents" not in body
+    assert "preserve our reputation" in body

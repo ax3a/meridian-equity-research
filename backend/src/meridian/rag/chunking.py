@@ -5,6 +5,12 @@ split on paragraph boundaries first; any paragraph that alone exceeds `target_to
 on sentence boundaries. Chunks are filled greedily up to `target_tokens`, and the trailing
 `overlap_tokens` worth of words from a chunk is carried into the start of the next chunk so retrieval
 doesn't lose context at a chunk boundary.
+
+Navigation furniture is removed before any of that. EDGAR HTML repeats a "Table of Contents" link at
+every page break, so extracted text collects runs like "7 Table of Contents Note 1. Note 2. 8 Table of
+Contents Note 3." Those runs get indexed like any other text and, being dense in filing vocabulary,
+score well against topical queries -- a real run reached a report as a cited fact. They are stripped
+here rather than at retrieval time so they never become evidence in the first place.
 """
 
 from __future__ import annotations
@@ -19,6 +25,15 @@ _WORD_RE = re.compile(r"\S+")
 _PARAGRAPH_SPLIT_RE = re.compile(r"(\n\s*\n)")
 
 _TOKENS_PER_WORD = 1.3
+
+# The page-break link EDGAR emits, plus any page number sitting immediately either side of it.
+_NAVIGATION_RE = re.compile(r"\s*\d{0,4}\s*\btable\s+of\s+contents\b\s*\d{0,4}\s*", re.IGNORECASE)
+# A "sentence" shorter than this is a heading, a page number or a cross-reference, not prose.
+_MIN_PROSE_WORDS = 8
+# Below this many sentences there is too little signal to judge, so the unit is kept.
+_MIN_SENTENCES_TO_JUDGE = 3
+# Above this share of fragments the unit is navigation furniture rather than a paragraph.
+_MAX_FRAGMENT_RATIO = 0.6
 
 
 @dataclass
@@ -35,6 +50,26 @@ def estimate_tokens(text: str) -> int:
     if words == 0:
         return 0
     return max(1, round(words * _TOKENS_PER_WORD))
+
+
+def strip_navigation(text: str) -> str:
+    """Remove EDGAR page-break navigation links and the page numbers attached to them."""
+    return _NAVIGATION_RE.sub(" ", text).strip()
+
+
+def is_navigation_noise(text: str) -> bool:
+    """True when `text` is a run of headings, page numbers and cross-references rather than prose.
+
+    Judged on the share of sentences too short to be prose: a table-of-contents run is almost entirely
+    fragments ("Note 3.", "11", "Item 1A."), while a real paragraph is mostly whole sentences. Short
+    inputs are never rejected -- a two-sentence paragraph carries too little signal to judge, and
+    discarding real disclosure is a far worse failure than keeping some furniture.
+    """
+    sentences = [s for s in _SENTENCE_BOUNDARY_RE.split(text) if s.strip()]
+    if len(sentences) < _MIN_SENTENCES_TO_JUDGE:
+        return False
+    fragments = sum(1 for s in sentences if len(_WORD_RE.findall(s)) < _MIN_PROSE_WORDS)
+    return fragments / len(sentences) > _MAX_FRAGMENT_RATIO
 
 
 def _split_paragraphs(text: str) -> list[tuple[str, int]]:
@@ -91,6 +126,13 @@ def chunk_section(section: DocumentSection, *, target_tokens: int = 350, overlap
             units.extend(_split_sentences(para_text, para_offset))
         else:
             units.append((para_text, para_offset))
+
+    # Offsets still point into the original section text, so cited evidence stays locatable in the filing.
+    units = [
+        (stripped, offset)
+        for stripped, offset in ((strip_navigation(text), offset) for text, offset in units)
+        if stripped and not is_navigation_noise(stripped)
+    ]
 
     if not units:
         return []
