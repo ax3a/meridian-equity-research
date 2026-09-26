@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import re
 from typing import Any
 
 from meridian.cache.base import Policies
@@ -18,8 +19,20 @@ PUBLISHER = "U.S. SEC EDGAR"
 RESOLVE_CUTOFF = 0.75
 
 
+_PUNCT_RE = re.compile(r"[^a-z0-9]+")
+# An apostrophe joins where other punctuation separates: EDGAR lists Lowe's as "LOWES COMPANIES INC", so
+# treating it like a hyphen gave "lowe s", whose leading word "lowe" matches nothing and left a perfectly
+# ordinary company unresolvable.
+_APOSTROPHE_RE = re.compile(r"['’ʼ`]")  # noqa: RUF001 - the curly and modifier forms are the point
+
+
+def _normalise(text: str) -> str:
+    """Lower-case and reduce punctuation to single spaces, so "Coca-Cola" and "COCA COLA CO" line up."""
+    return _PUNCT_RE.sub(" ", _APOSTROPHE_RE.sub("", text.lower())).strip()
+
+
 def _leading_word(title: str) -> str:
-    return title.strip().split(" ", 1)[0].strip(",.&")
+    return _normalise(title).split(" ", 1)[0]
 
 
 class SecCompanyDirectory:
@@ -71,8 +84,11 @@ class SecCompanyDirectory:
         # is deliberately NOT supported: a generic word like "Holdings" appears in thousands of titles,
         # and accepting one produced a confident, fully-cited report on an unrelated company. A partial
         # name such as "Chase" is genuinely ambiguous and should fail rather than guess.
-        ql = q.lower()
-        lowered = [(str(r["title"]).lower(), r) for r in rows]
+        # Compare on a normalised form: punctuation and spacing differ between how people write a name
+        # and how SEC stores it. "Coca-Cola" does not prefix-match "COCA COLA CO", which resolved the
+        # query to Coca-Cola Consolidated (a bottler) instead of The Coca-Cola Company.
+        ql = _normalise(q)
+        lowered = [(_normalise(str(r["title"])), r) for r in rows]
         prefix_matches = [r for t, r in lowered if t.startswith(ql)]
         if prefix_matches:
             # Shortest title wins: the parent entity rather than a longer subsidiary or fund.
