@@ -33,30 +33,47 @@ def safe_div(numerator: float | None, denominator: float | None) -> float | None
     return numerator / denominator
 
 
+def _all_present(values: tuple[float | None, ...]) -> tuple[float, ...] | None:
+    """The operands with every ``None`` ruled out, or ``None`` if one was missing.
+
+    An ``any(v is None for v in values)`` guard is correct but invisible to a type checker, which then
+    reads the rest of the function as arithmetic on ``float | None``. Narrowing once, here, keeps these
+    helpers both checkable and honest about what they accept.
+    """
+    present: list[float] = []
+    for value in values:
+        if value is None:
+            return None
+        present.append(value)
+    return tuple(present)
+
+
 def safe_sub(*values: float | None) -> float | None:
-    """Left-to-right subtraction; ``None`` if any operand is ``None``."""
-    if any(v is None for v in values):
+    """Left-to-right subtraction; ``None`` if any operand is ``None`` or none were given."""
+    present = _all_present(values)
+    # Subtraction has no identity element to return for an empty call, and this module never raises.
+    if not present:
         return None
-    result = values[0]
-    for v in values[1:]:
-        result = result - v
+    result = present[0]
+    for value in present[1:]:
+        result -= value
     return result
 
 
 def safe_add(*values: float | None) -> float | None:
     """Sum; ``None`` if any operand is ``None``."""
-    if any(v is None for v in values):
-        return None
-    return sum(values)
+    present = _all_present(values)
+    return None if present is None else sum(present)
 
 
 def safe_mul(*values: float | None) -> float | None:
     """Product; ``None`` if any operand is ``None``."""
-    if any(v is None for v in values):
+    present = _all_present(values)
+    if present is None:
         return None
     result = 1.0
-    for v in values:
-        result *= v
+    for value in present:
+        result *= value
     return result
 
 

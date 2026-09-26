@@ -45,7 +45,7 @@ from meridian.financial_engine.multiples import (
     price_fcf,
     price_sales,
 )
-from meridian.financial_engine.safe import Calc
+from meridian.financial_engine.safe import Calc, safe_add
 from meridian.schemas.financials import (
     FinancialMetrics,
     FinancialStatements,
@@ -205,10 +205,12 @@ def _emit_revenue_cagr(metrics: FinancialMetrics, annual: list[PeriodFinancials]
 
 
 def _sum_field(periods: list[PeriodFinancials], field_name: str) -> float | None:
-    values = [p.value(field_name) for p in periods]
-    if any(v is None for v in values):
-        return None
-    return sum(values)
+    """Total `field_name` across `periods`, or None when any period is missing it.
+
+    A partial sum would silently understate the figure, so one missing period voids the total --
+    which is exactly `safe_add`'s contract.
+    """
+    return safe_add(*(p.value(field_name) for p in periods))
 
 
 def _consecutive_quarters(periods: list[PeriodFinancials]) -> bool:

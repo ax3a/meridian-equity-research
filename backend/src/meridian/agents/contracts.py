@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from meridian.schemas.analysis import CriticReview
 from meridian.schemas.citations import Evidence, Source
@@ -60,7 +60,11 @@ class WriterResult:
 
 
 class Specialist(Protocol):
-    name: AgentName
+    # ClassVar, because every agent sets its name on the class and none of them can be renamed per
+    # instance. Declared as a plain attribute this protocol promised something settable, so no real
+    # agent satisfied it -- visible only for Bull and Bear, since the rest are loaded dynamically and
+    # arrive as `Any`.
+    name: ClassVar[AgentName]
 
     async def execute(self, task: ResearchTask, state: ResearchState) -> AgentResult: ...
 
